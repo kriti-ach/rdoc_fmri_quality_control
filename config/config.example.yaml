@@ -1,0 +1,29 @@
+flywheel:
+  # Recommended: export as environment variable and reference with your launcher wrapper.
+  api_key: "REPLACE_WITH_FLYWHEEL_API_KEY"
+  group_id: "russpold"
+  project_label: "rdoc_fmri"
+  task_name_contains: "goNogo"
+
+qc:
+  mask_min_mean: 1.0e-6
+  # Optional: 3D mask in BOLD space for line-artifact ROI metrics.
+  line_roi_mask_nifti: ""
+
+  # One-scan test
+  single_scan_nifti: "/scratch/users/kritiach/rdoc_fmri_quality_control/data/32621_6_1_ses-04_RDoC_fmri_20260202123240_6_e2.nii.gz"
+  single_scan_output_dir: "/oak/stanford/groups/russpold/data/rdoc_mriqc_test/quality_control/single_scan"
+
+  # Full Flywheel outputs
+  all_scans_output_dir: "/oak/stanford/groups/russpold/data/rdoc_mriqc_test/quality_control/all_scans"
+
+mriqc:
+  singularity_image: "/home/groups/russpold/singularity_images/mriqc_24.0.2.sif"
+  output_root: "/oak/stanford/groups/russpold/data/rdoc_mriqc_test"
+  logs_dir: "/scratch/users/kritiach/rdoc_fmri_quality_control/scripts/logs"
+  bids:
+    subject: "23"
+    session: "04"
+    task: "goNogo"
+    run: "1"
+  input_nifti: "32621_6_1_ses-04_RDoC_fmri_20260202123240_6_e2.nii.gz"
