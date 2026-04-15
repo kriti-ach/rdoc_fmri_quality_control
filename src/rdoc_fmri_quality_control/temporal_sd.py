@@ -117,7 +117,8 @@ def detect_central_line_artifact(
     center_width: int = 5,
 ) -> dict[str, float | bool]:
     """
-    Detect if high-SD outliers are concentrated in central sagittal slices.
+    Detect if high-SD outliers form a horizontal line through the brain.
+    Checks if outliers cluster around the middle Z coordinate (inferior-superior).
     
     Parameters
     ----------
@@ -128,7 +129,7 @@ def detect_central_line_artifact(
     z_threshold : float
         Z-score threshold for defining outliers
     center_width : int
-        Number of slices around center to check (total width)
+        Number of slices around horizontal center to check (total width)
         
     Returns
     -------
@@ -154,21 +155,21 @@ def detect_central_line_artifact(
             "outliers_total": 0,
         }
     
-    # Check sagittal center slices (assuming standard orientation)
-    # Adjust axis if your data has different orientation
-    nx = sd_map.shape[0]
-    center_idx = nx // 2
+    # Check horizontal band in Z dimension (inferior-superior)
+    # This corresponds to a horizontal line visible in sagittal/coronal views
+    nz = sd_map.shape[2]
+    center_z = nz // 2
     half_width = center_width // 2
     
-    center_slice = slice(
-        max(0, center_idx - half_width),
-        min(nx, center_idx + half_width + 1)
+    z_slice = slice(
+        max(0, center_z - half_width),
+        min(nz, center_z + half_width + 1)
     )
     
-    outliers_in_center = int(np.sum(outlier_mask[center_slice, :, :]))
+    outliers_in_center = int(np.sum(outlier_mask[:, :, z_slice]))
     concentration = outliers_in_center / total_outliers
     
-    # Flag if >50% of outliers are in center slices
+    # Flag if >50% of outliers are in center horizontal band
     has_artifact = concentration > 0.5
     
     return {
@@ -176,6 +177,8 @@ def detect_central_line_artifact(
         "central_concentration": float(concentration),
         "outliers_in_center": outliers_in_center,
         "outliers_total": total_outliers,
+        "center_z_start": max(0, center_z - half_width),
+        "center_z_end": min(nz, center_z + half_width + 1),
     }
 
 import matplotlib
@@ -185,7 +188,7 @@ import matplotlib.patches as mpatches
 
 def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_width=5, artifact_info=None):
     """
-    Create visualization showing outliers and center detection region.
+    Create visualization showing outliers and horizontal line detection region.
     
     Parameters
     ----------
@@ -199,72 +202,84 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
     
     outlier_mask = (z_scores > z_threshold) & mask
     
-    # Center region for sagittal (x-axis)
-    nx = tsd_map.shape[0]
-    center_idx = nx // 2
+    # Horizontal band in Z dimension (inferior-superior)
+    # This is what shows up as a horizontal line in sagittal/coronal views
+    nz = tsd_map.shape[2]
+    center_z = nz // 2
     half_width = center_width // 2
-    center_start = max(0, center_idx - half_width)
-    center_end = min(nx, center_idx + half_width + 1)
+    z_start = max(0, center_z - half_width)
+    z_end = min(nz, center_z + half_width + 1)
+    
+    # Get from artifact_info if available
+    if artifact_info:
+        z_start = artifact_info.get('center_z_start', z_start)
+        z_end = artifact_info.get('center_z_end', z_end)
     
     fig, axes = plt.subplots(3, 3, figsize=(18, 15))
     
-    # Row 1: TSD maps with center region marked
-    # Sagittal (center slice - this IS the center region being checked)
-    slice_idx = center_idx
+    # Row 1: TSD maps with horizontal center band marked
+    # Sagittal - mark horizontal band
+    slice_idx = tsd_map.shape[0] // 2
     im0 = axes[0, 0].imshow(tsd_map[slice_idx, :, :].T, cmap='viridis', origin='lower', vmin=0, vmax=np.percentile(tsd_map[mask], 99))
-    axes[0, 0].set_title(f'TSD - Sagittal (slice {slice_idx})\n**THIS IS CENTER SLICE**\nDetection checks slices {center_start}-{center_end}')
+    axes[0, 0].axhspan(z_start, z_end, alpha=0.25, color='red', label=f'Horizontal band\n(Z slices {z_start}-{z_end})')
+    axes[0, 0].set_title(f'TSD - Sagittal (slice {slice_idx})\nRed band = horizontal line region')
     axes[0, 0].set_xlabel('Y (posterior ← → anterior)')
     axes[0, 0].set_ylabel('Z (inferior ← → superior)')
+    axes[0, 0].legend(loc='upper right', fontsize=8)
     plt.colorbar(im0, ax=axes[0, 0], fraction=0.046, label='TSD')
     
-    # Coronal - mark center region as vertical band
+    # Coronal - mark horizontal band
     slice_idx = tsd_map.shape[1] // 2
     im1 = axes[0, 1].imshow(tsd_map[:, slice_idx, :].T, cmap='viridis', origin='lower', vmin=0, vmax=np.percentile(tsd_map[mask], 99))
-    # Add shaded region showing which X slices are "center"
-    axes[0, 1].axvspan(center_start, center_end, alpha=0.2, color='red', label=f'Center region\n(X slices {center_start}-{center_end})')
-    axes[0, 1].set_title(f'TSD - Coronal (slice {slice_idx})')
+    axes[0, 1].axhspan(z_start, z_end, alpha=0.25, color='red', label=f'Horizontal band\n(Z slices {z_start}-{z_end})')
+    axes[0, 1].set_title(f'TSD - Coronal (slice {slice_idx})\nRed band = horizontal line region')
     axes[0, 1].set_xlabel('X (left ← → right)')
     axes[0, 1].set_ylabel('Z (inferior ← → superior)')
-    axes[0, 1].legend(loc='upper right')
+    axes[0, 1].legend(loc='upper right', fontsize=8)
     plt.colorbar(im1, ax=axes[0, 1], fraction=0.046, label='TSD')
     
-    # Axial - mark center region as vertical band
-    slice_idx = tsd_map.shape[2] // 2
+    # Axial - this slice might be IN the horizontal band
+    slice_idx = center_z
     im2 = axes[0, 2].imshow(tsd_map[:, :, slice_idx].T, cmap='viridis', origin='lower', vmin=0, vmax=np.percentile(tsd_map[mask], 99))
-    axes[0, 2].axvspan(center_start, center_end, alpha=0.2, color='red', label=f'Center region\n(X slices {center_start}-{center_end})')
-    axes[0, 2].set_title(f'TSD - Axial (slice {slice_idx})')
+    in_band = "YES - IN BAND" if z_start <= slice_idx <= z_end else "NO"
+    axes[0, 2].set_title(f'TSD - Axial (Z slice {slice_idx})\nThis slice in horizontal band? {in_band}')
     axes[0, 2].set_xlabel('X (left ← → right)')
     axes[0, 2].set_ylabel('Y (posterior ← → anterior)')
-    axes[0, 2].legend(loc='upper right')
     plt.colorbar(im2, ax=axes[0, 2], fraction=0.046, label='TSD')
     
-    # Row 2: Outlier masks overlaid on anatomy
-    # Sagittal - show outliers on this center slice
-    slice_idx = center_idx
-    axes[1, 0].imshow(tsd_map[slice_idx, :, :].T, cmap='gray', origin='lower', alpha=0.5)
-    outlier_overlay = np.ma.masked_where(~outlier_mask[slice_idx, :, :].T, outlier_mask[slice_idx, :, :].T)
-    axes[1, 0].imshow(outlier_overlay, cmap='Reds', origin='lower', alpha=0.8)
-    axes[1, 0].set_title(f'Outliers (z>{z_threshold}) - Sagittal\n**CENTER SLICE** - outliers HERE count as "in center"')
+    # Row 2: Outlier locations as scatter plot (dots)
+    # Sagittal - show outliers as red dots
+    slice_idx = tsd_map.shape[0] // 2
+    outlier_slice = outlier_mask[slice_idx, :, :]
+    y_coords, z_coords = np.where(outlier_slice)
+    axes[1, 0].imshow(tsd_map[slice_idx, :, :].T, cmap='gray', origin='lower', alpha=0.7)
+    axes[1, 0].scatter(y_coords, z_coords, c='red', s=2, alpha=0.8)
+    axes[1, 0].axhspan(z_start, z_end, alpha=0.2, color='cyan', label='Horizontal band')
+    axes[1, 0].set_title(f'Outliers (z>{z_threshold}) - Sagittal\nRed dots in cyan band count as "in center"')
     axes[1, 0].set_xlabel('Y (posterior ← → anterior)')
     axes[1, 0].set_ylabel('Z (inferior ← → superior)')
+    axes[1, 0].legend(fontsize=8)
     
-    # Coronal - mark center region
+    # Coronal - show outliers as red dots
     slice_idx = tsd_map.shape[1] // 2
-    axes[1, 1].imshow(tsd_map[:, slice_idx, :].T, cmap='gray', origin='lower', alpha=0.5)
-    outlier_overlay = np.ma.masked_where(~outlier_mask[:, slice_idx, :].T, outlier_mask[:, slice_idx, :].T)
-    axes[1, 1].imshow(outlier_overlay, cmap='Reds', origin='lower', alpha=0.8)
-    axes[1, 1].axvspan(center_start, center_end, alpha=0.2, color='red')
-    axes[1, 1].set_title(f'Outliers - Coronal\nRed band = center region')
+    outlier_slice = outlier_mask[:, slice_idx, :]
+    x_coords, z_coords = np.where(outlier_slice)
+    axes[1, 1].imshow(tsd_map[:, slice_idx, :].T, cmap='gray', origin='lower', alpha=0.7)
+    axes[1, 1].scatter(x_coords, z_coords, c='red', s=2, alpha=0.8)
+    axes[1, 1].axhspan(z_start, z_end, alpha=0.2, color='cyan', label='Horizontal band')
+    axes[1, 1].set_title(f'Outliers - Coronal\nRed dots in cyan band count as "in center"')
     axes[1, 1].set_xlabel('X (left ← → right)')
     axes[1, 1].set_ylabel('Z (inferior ← → superior)')
+    axes[1, 1].legend(fontsize=8)
     
-    # Axial - mark center region
-    slice_idx = tsd_map.shape[2] // 2
-    axes[1, 2].imshow(tsd_map[:, :, slice_idx].T, cmap='gray', origin='lower', alpha=0.5)
-    outlier_overlay = np.ma.masked_where(~outlier_mask[:, :, slice_idx].T, outlier_mask[:, :, slice_idx].T)
-    axes[1, 2].imshow(outlier_overlay, cmap='Reds', origin='lower', alpha=0.8)
-    axes[1, 2].axvspan(center_start, center_end, alpha=0.2, color='red')
-    axes[1, 2].set_title(f'Outliers - Axial\nRed band = center region')
+    # Axial - show outliers as red dots
+    slice_idx = center_z
+    outlier_slice = outlier_mask[:, :, slice_idx]
+    x_coords, y_coords = np.where(outlier_slice)
+    axes[1, 2].imshow(tsd_map[:, :, slice_idx].T, cmap='gray', origin='lower', alpha=0.7)
+    axes[1, 2].scatter(x_coords, y_coords, c='red', s=2, alpha=0.8)
+    in_band = "YES" if z_start <= slice_idx <= z_end else "NO"
+    axes[1, 2].set_title(f'Outliers - Axial (Z={slice_idx})\nThis slice in horizontal band? {in_band}')
     axes[1, 2].set_xlabel('X (left ← → right)')
     axes[1, 2].set_ylabel('Y (posterior ← → anterior)')
     
@@ -272,41 +287,43 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
     # X-axis (sagittal): count outliers in each x-slice
     outlier_counts_x = np.sum(outlier_mask, axis=(1, 2))
     axes[2, 0].bar(range(len(outlier_counts_x)), outlier_counts_x, color='steelblue', alpha=0.7)
-    axes[2, 0].axvspan(center_start, center_end, alpha=0.3, color='red', 
-                       label=f'Center region\n(slices {center_start}-{center_end})')
-    axes[2, 0].axvline(center_idx, color='red', linestyle='--', linewidth=2, label=f'Center slice ({center_idx})')
     axes[2, 0].set_xlabel('X slice index (left ← → right)')
     axes[2, 0].set_ylabel('Outlier count')
-    axes[2, 0].set_title('Outliers per sagittal slice\n**This shows if outliers cluster in center X slices**')
-    axes[2, 0].legend(fontsize=8)
+    axes[2, 0].set_title('Outliers per sagittal slice\n(left-right distribution)')
     
     # Y-axis (coronal): count outliers in each y-slice
     outlier_counts_y = np.sum(outlier_mask, axis=(0, 2))
     axes[2, 1].bar(range(len(outlier_counts_y)), outlier_counts_y, color='steelblue', alpha=0.7)
     axes[2, 1].set_xlabel('Y slice index (posterior ← → anterior)')
     axes[2, 1].set_ylabel('Outlier count')
-    axes[2, 1].set_title('Outliers per coronal slice\n(would show front-back clustering)')
+    axes[2, 1].set_title('Outliers per coronal slice\n(front-back distribution)')
     
-    # Z-axis (axial): count outliers in each z-slice
+    # Z-axis (axial): count outliers in each z-slice - THIS IS KEY FOR HORIZONTAL LINE
     outlier_counts_z = np.sum(outlier_mask, axis=(0, 1))
     axes[2, 2].bar(range(len(outlier_counts_z)), outlier_counts_z, color='steelblue', alpha=0.7)
+    axes[2, 2].axvspan(z_start, z_end, alpha=0.3, color='red', 
+                       label=f'Horizontal band\n(Z slices {z_start}-{z_end})')
+    axes[2, 2].axvline(center_z, color='red', linestyle='--', linewidth=2, label=f'Center Z ({center_z})')
     axes[2, 2].set_xlabel('Z slice index (inferior ← → superior)')
     axes[2, 2].set_ylabel('Outlier count')
-    axes[2, 2].set_title('Outliers per axial slice\n(would show up-down clustering)')
+    axes[2, 2].set_title('**KEY: Outliers per Z slice**\nPeak in red band = horizontal line artifact')
+    axes[2, 2].legend(fontsize=8)
     
     # Add artifact detection info if provided
     if artifact_info:
         flag = artifact_info.get('central_artifact_flag', False)
         conc = artifact_info.get('central_concentration', 0)
         info_text = (
-            f"Central Sagittal Artifact Detection:\n"
-            f"Checking X slices {center_start}-{center_end} (red band in coronal/axial)\n"
+            f"Horizontal Line Artifact Detection:\n"
+            f"Checking Z slices {z_start}-{z_end}\n"
+            f"(red/cyan bands in sagittal/coronal views)\n"
             f"FLAG: {'YES - ARTIFACT DETECTED' if flag else 'NO'}\n"
-            f"Concentration in center: {conc:.1%}\n"
-            f"Center outliers: {artifact_info.get('outliers_in_center', 0)}\n"
+            f"Concentration in band: {conc:.1%}\n"
+            f"Band outliers: {artifact_info.get('outliers_in_center', 0)}\n"
             f"Total outliers: {artifact_info.get('outliers_total', 0)}\n\n"
-            f"Interpretation: {conc:.0%} of extreme outliers are\n"
-            f"in the center sagittal slices (midline region)"
+            f"Interpretation: {conc:.0%} of extreme outliers\n"
+            f"are in the horizontal Z band\n"
+            f"(the horizontal line through the brain)"
         )
         fig.text(0.02, 0.98, info_text, transform=fig.transFigure,
                 fontsize=11, verticalalignment='top', family='monospace',

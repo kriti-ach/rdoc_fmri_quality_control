@@ -251,7 +251,7 @@ def main() -> None:
         if args.limit and n_processed >= args.limit:
             break
 
-    # Essential extent, prevalence, and central artifact detection metrics.
+    # Essential extent, prevalence, and horizontal line artifact detection metrics.
     fieldnames = [
         "project",
         "subject_label",
@@ -273,6 +273,8 @@ def main() -> None:
         "central_concentration",
         "outliers_in_center",
         "outliers_total",
+        "center_z_start",
+        "center_z_end",
     ]
 
     with out_csv.open("w", newline="", encoding="utf-8") as f:
