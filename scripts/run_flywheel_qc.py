@@ -16,6 +16,24 @@ import yaml
 from rdoc_fmri_quality_control.temporal_sd import compute_sd_metrics, robust_z
 
 
+def resolve_config_path(config_arg: str | None) -> Path:
+    if config_arg:
+        path = Path(config_arg).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(f"Config file not found: {path}")
+        return path
+
+    candidates = [Path("config/config.yaml"), Path("config/config.example.yaml")]
+    for path in candidates:
+        if path.exists():
+            return path
+
+    raise FileNotFoundError(
+        "No config provided and none found at config/config.yaml or config/config.example.yaml. "
+        "Pass --config /path/to/config.yaml."
+    )
+
+
 def load_config(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f)
@@ -63,6 +81,22 @@ def session_time_key(ses) -> str:
     return ""
 
 
+def infer_task_label(file_name: str, acq_label: str, session_label: str) -> str:
+    text_candidates = [file_name, acq_label, session_label]
+    patterns = [
+        re.compile(r"task-([A-Za-z0-9]+)", re.IGNORECASE),
+        re.compile(r"_([A-Za-z][A-Za-z0-9]+)_bold", re.IGNORECASE),
+    ]
+    for text in text_candidates:
+        if not text:
+            continue
+        for pat in patterns:
+            m = pat.search(text)
+            if m:
+                return m.group(1)
+    return ""
+
+
 def compute_roi_sd_metrics(sd_map: np.ndarray, brain_mask: np.ndarray, roi_mask: np.ndarray) -> dict[str, float | int]:
     roi = np.logical_and(brain_mask, roi_mask > 0)
     vals = sd_map[roi]
@@ -84,10 +118,77 @@ def compute_roi_sd_metrics(sd_map: np.ndarray, brain_mask: np.ndarray, roi_mask:
     }
 
 
+def compute_outlier_location_metrics(
+    sd_map: np.ndarray,
+    brain_mask: np.ndarray,
+    z_threshold: float = 8.0,
+    midline_half_width_frac_x: float = 0.10,
+) -> dict[str, float | int | str]:
+    vals = sd_map[brain_mask]
+    z, _, _ = robust_z(vals)
+
+    brain_flat_idx = np.flatnonzero(brain_mask)
+    outlier_flat_idx = brain_flat_idx[z >= z_threshold]
+    n_outliers = int(outlier_flat_idx.size)
+
+    if n_outliers == 0:
+        return {
+            "extreme_z_threshold": float(z_threshold),
+            "n_extreme_outlier_voxels": 0,
+            "frac_extreme_outlier_voxels": 0.0,
+            "midline_half_width_vox_x": int(max(1, round(sd_map.shape[0] * midline_half_width_frac_x))),
+            "n_extreme_midline_voxels": 0,
+            "frac_extreme_midline": 0.0,
+            "extreme_com_x": np.nan,
+            "extreme_com_y": np.nan,
+            "extreme_com_z": np.nan,
+            "extreme_lr_bias": "none",
+        }
+
+    xyz = np.column_stack(np.unravel_index(outlier_flat_idx, sd_map.shape))
+    x = xyz[:, 0].astype(np.float64)
+    mid_x = (sd_map.shape[0] - 1) / 2.0
+    midline_half_width_vox = int(max(1, round(sd_map.shape[0] * midline_half_width_frac_x)))
+    is_midline = np.abs(x - mid_x) <= midline_half_width_vox
+    n_midline = int(np.sum(is_midline))
+
+    com_x = float(np.mean(x))
+    com_y = float(np.mean(xyz[:, 1]))
+    com_z = float(np.mean(xyz[:, 2]))
+    if abs(com_x - mid_x) <= midline_half_width_vox:
+        lr_bias = "midline"
+    elif com_x < mid_x:
+        lr_bias = "left"
+    else:
+        lr_bias = "right"
+
+    return {
+        "extreme_z_threshold": float(z_threshold),
+        "n_extreme_outlier_voxels": n_outliers,
+        "frac_extreme_outlier_voxels": float(n_outliers / np.count_nonzero(brain_mask)),
+        "midline_half_width_vox_x": midline_half_width_vox,
+        "n_extreme_midline_voxels": n_midline,
+        "frac_extreme_midline": float(n_midline / n_outliers),
+        "extreme_com_x": com_x,
+        "extreme_com_y": com_y,
+        "extreme_com_z": com_z,
+        "extreme_lr_bias": lr_bias,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run temporal SD QC across Flywheel acquisitions")
-    parser.add_argument("--config", required=True, help="Path to YAML config")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to YAML config (optional; defaults to config/config.yaml if present).",
+    )
     parser.add_argument("--limit", type=int, default=None, help="Optional cap for quick testing")
+    parser.add_argument(
+        "--task-name-contains",
+        default="",
+        help="Optional substring filter for tasks/scans. Leave empty to include all tasks.",
+    )
     parser.add_argument("--subject-label", default=None, help="Only include sessions for this subject label/code (e.g., s23)")
     parser.add_argument(
         "--session-rank",
@@ -105,16 +206,29 @@ def main() -> None:
         default=None,
         help="Optional ROI mask NIfTI for line-artifact area; must match BOLD volume shape.",
     )
+    parser.add_argument(
+        "--extreme-z-threshold",
+        type=float,
+        default=8.0,
+        help="Robust-z threshold used to define extreme temporal-SD outlier voxels.",
+    )
+    parser.add_argument(
+        "--midline-half-width-frac-x",
+        type=float,
+        default=0.10,
+        help="Midline half-width in x dimension as fraction of image width (for outlier localization).",
+    )
     args = parser.parse_args()
 
-    cfg = load_config(Path(args.config))
+    config_path = resolve_config_path(args.config)
+    cfg = load_config(config_path)
     fw_cfg = cfg["flywheel"]
     qc = cfg["qc"]
 
     fw = flywheel.Client(fw_cfg["api_key"])
     group_id = fw_cfg["group_id"]
     project_label = fw_cfg["project_label"]
-    task_filter = fw_cfg.get("task_name_contains", "")
+    task_filter = args.task_name_contains.strip()
 
     projects = fw.projects.find(f"group={group_id},label={project_label}")
     if not projects:
@@ -167,6 +281,12 @@ def main() -> None:
                             local_path,
                             min_mean=float(qc.get("mask_min_mean", 1e-6)),
                         )
+                        loc_metrics = compute_outlier_location_metrics(
+                            sd_map=sd_map,
+                            brain_mask=brain_mask,
+                            z_threshold=float(args.extreme_z_threshold),
+                            midline_half_width_frac_x=float(args.midline_half_width_frac_x),
+                        )
                         roi_metrics = {}
                         if roi_mask_data is not None:
                             if tuple(roi_mask_data.shape) != tuple(sd_map.shape):
@@ -193,6 +313,7 @@ def main() -> None:
                         "project": project.label,
                         "session_label": ses.label,
                         "subject_label": subject_label_from_session(ses),
+                        "task_label": infer_task_label(fname, str(_obj_get(acq, "label", "")), str(_obj_get(ses, "label", ""))),
                         "acquisition_label": acq.label,
                         "file_name": fname,
                         "status": "ok",
@@ -201,6 +322,7 @@ def main() -> None:
                 )
                 if roi_mask_data is not None:
                     row.update(roi_metrics)
+                row.update(loc_metrics)
                 rows.append(row)
                 n_processed += 1
                 print(f"processed {n_processed}: {ses.label} | {acq.label} | {fname}")
@@ -216,6 +338,7 @@ def main() -> None:
     base_cols = [
         "project",
         "subject_label",
+        "task_label",
         "session_label",
         "acquisition_label",
         "file_name",
@@ -249,9 +372,21 @@ def main() -> None:
         "roi_frac_z_ge_6",
         "roi_frac_z_ge_8",
     ]
+    loc_cols = [
+        "extreme_z_threshold",
+        "n_extreme_outlier_voxels",
+        "frac_extreme_outlier_voxels",
+        "midline_half_width_vox_x",
+        "n_extreme_midline_voxels",
+        "frac_extreme_midline",
+        "extreme_com_x",
+        "extreme_com_y",
+        "extreme_com_z",
+        "extreme_lr_bias",
+    ]
 
     with out_csv.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=base_cols + metric_cols + roi_cols)
+        writer = csv.DictWriter(f, fieldnames=base_cols + metric_cols + roi_cols + loc_cols)
         writer.writeheader()
         for row in rows:
             writer.writerow(row)

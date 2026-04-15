@@ -3,7 +3,7 @@ flywheel:
   api_key: "REPLACE_WITH_FLYWHEEL_API_KEY"
   group_id: "russpold"
   project_label: "rdoc_fmri"
-  task_name_contains: "goNogo"
+  task_name_contains: ""
 
 qc:
   mask_min_mean: 1.0e-6
