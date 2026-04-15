@@ -11,7 +11,11 @@ from typing import Iterable
 import flywheel
 import yaml
 
-from rdoc_fmri_quality_control.temporal_sd import compute_sd_metrics, detect_central_line_artifact
+from rdoc_fmri_quality_control.temporal_sd import (
+    compute_sd_metrics,
+    detect_central_line_artifact,
+    visualize_outliers,
+)
 
 
 def resolve_config_path(config_arg: str | None) -> Path:
@@ -109,6 +113,11 @@ def main() -> None:
         default="",
         help="Optional substring filter for tasks/scans. Leave empty to include all tasks.",
     )
+    parser.add_argument(
+        "--save-visualizations",
+        action="store_true",
+        help="Save outlier visualization PNGs for each scan.",
+    )
     parser.add_argument("--subject-label", default=None, help="Only include sessions for this subject label/code (e.g., s23)")
     parser.add_argument(
         "--session-rank",
@@ -142,6 +151,11 @@ def main() -> None:
     out_dir = Path(qc["all_scans_output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
     out_csv = out_dir / "flywheel_temporal_sd_metrics.csv"
+    
+    viz_dir = None
+    if args.save_visualizations:
+        viz_dir = out_dir / "visualizations"
+        viz_dir.mkdir(parents=True, exist_ok=True)
 
     file_regex = re.compile(args.file_regex) if args.file_regex else None
 
@@ -186,6 +200,19 @@ def main() -> None:
                             z_threshold=8.0,
                             center_width=5,
                         )
+                        
+                        if viz_dir is not None:
+                            viz_name = f"{subject_label_from_session(ses)}_{ses.label}_{Path(fname).stem}_outliers.png"
+                            viz_path = viz_dir / viz_name
+                            visualize_outliers(
+                                tsd_map=sd_map,
+                                mask=brain_mask,
+                                z_threshold=8,
+                                save_path=str(viz_path),
+                                center_width=5,
+                                artifact_info=artifact_metrics,
+                            )
+                            print(f"  saved visualization: {viz_path.name}")
                     except Exception as e:  # noqa: BLE001
                         rows.append(
                             {

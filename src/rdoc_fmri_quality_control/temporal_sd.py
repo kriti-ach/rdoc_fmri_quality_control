@@ -178,50 +178,120 @@ def detect_central_line_artifact(
         "outliers_total": total_outliers,
     }
 
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 
-def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None):
+def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_width=5, artifact_info=None):
     """
-    Create visualization similar to MRIQC report.
+    Create visualization showing outliers and center detection region.
+    
+    Parameters
+    ----------
+    artifact_info : dict, optional
+        Output from detect_central_line_artifact() to display on plot
     """
     median_tsd = np.median(tsd_map[mask])
     mad = np.median(np.abs(tsd_map[mask] - median_tsd))
     robust_std = 1.4826 * mad
     z_scores = (tsd_map - median_tsd) / robust_std
     
-    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    outlier_mask = (z_scores > z_threshold) & mask
     
-    # Sagittal views
-    slice_idx = tsd_map.shape[0] // 2
-    axes[0, 0].imshow(tsd_map[slice_idx, :, :].T, cmap='hot', origin='lower')
-    axes[0, 0].set_title('TSD - Sagittal')
+    # Center region for sagittal (x-axis)
+    nx = tsd_map.shape[0]
+    center_idx = nx // 2
+    half_width = center_width // 2
+    center_start = max(0, center_idx - half_width)
+    center_end = min(nx, center_idx + half_width + 1)
     
-    axes[1, 0].imshow((z_scores[slice_idx, :, :] > z_threshold).T, 
-                      cmap='Reds', origin='lower')
-    axes[1, 0].set_title(f'Outliers (>{z_threshold}SD) - Sagittal')
+    fig, axes = plt.subplots(3, 3, figsize=(18, 15))
     
-    # Coronal views
+    # Row 1: TSD maps
+    # Sagittal (center slice with box showing center region)
+    slice_idx = center_idx
+    im0 = axes[0, 0].imshow(tsd_map[slice_idx, :, :].T, cmap='hot', origin='lower')
+    axes[0, 0].set_title(f'TSD - Sagittal (slice {slice_idx})\n[CENTER SLICE]')
+    plt.colorbar(im0, ax=axes[0, 0], fraction=0.046)
+    
+    # Coronal
     slice_idx = tsd_map.shape[1] // 2
-    axes[0, 1].imshow(tsd_map[:, slice_idx, :].T, cmap='hot', origin='lower')
-    axes[0, 1].set_title('TSD - Coronal')
+    im1 = axes[0, 1].imshow(tsd_map[:, slice_idx, :].T, cmap='hot', origin='lower')
+    axes[0, 1].axvline(center_start, color='cyan', linestyle='--', linewidth=2, label='Center region')
+    axes[0, 1].axvline(center_end, color='cyan', linestyle='--', linewidth=2)
+    axes[0, 1].set_title(f'TSD - Coronal (slice {slice_idx})')
+    axes[0, 1].legend()
+    plt.colorbar(im1, ax=axes[0, 1], fraction=0.046)
     
-    axes[1, 1].imshow((z_scores[:, slice_idx, :] > z_threshold).T, 
-                      cmap='Reds', origin='lower')
+    # Axial
+    slice_idx = tsd_map.shape[2] // 2
+    im2 = axes[0, 2].imshow(tsd_map[:, :, slice_idx].T, cmap='hot', origin='lower')
+    axes[0, 2].axvline(center_start, color='cyan', linestyle='--', linewidth=2, label='Center region')
+    axes[0, 2].axvline(center_end, color='cyan', linestyle='--', linewidth=2)
+    axes[0, 2].set_title(f'TSD - Axial (slice {slice_idx})')
+    axes[0, 2].legend()
+    plt.colorbar(im2, ax=axes[0, 2], fraction=0.046)
+    
+    # Row 2: Outlier masks
+    slice_idx = center_idx
+    axes[1, 0].imshow(outlier_mask[slice_idx, :, :].T, cmap='Reds', origin='lower')
+    axes[1, 0].set_title(f'Outliers (z>{z_threshold}) - Sagittal [CENTER]')
+    
+    slice_idx = tsd_map.shape[1] // 2
+    axes[1, 1].imshow(outlier_mask[:, slice_idx, :].T, cmap='Reds', origin='lower')
+    axes[1, 1].axvline(center_start, color='cyan', linestyle='--', linewidth=2)
+    axes[1, 1].axvline(center_end, color='cyan', linestyle='--', linewidth=2)
     axes[1, 1].set_title(f'Outliers - Coronal')
     
-    # Axial views
     slice_idx = tsd_map.shape[2] // 2
-    axes[0, 2].imshow(tsd_map[:, :, slice_idx].T, cmap='hot', origin='lower')
-    axes[0, 2].set_title('TSD - Axial')
-    
-    axes[1, 2].imshow((z_scores[:, :, slice_idx] > z_threshold).T, 
-                      cmap='Reds', origin='lower')
+    axes[1, 2].imshow(outlier_mask[:, :, slice_idx].T, cmap='Reds', origin='lower')
+    axes[1, 2].axvline(center_start, color='cyan', linestyle='--', linewidth=2)
+    axes[1, 2].axvline(center_end, color='cyan', linestyle='--', linewidth=2)
     axes[1, 2].set_title(f'Outliers - Axial')
+    
+    # Row 3: Outlier counts per slice across each axis
+    # X-axis (sagittal): count outliers in each x-slice
+    outlier_counts_x = np.sum(outlier_mask, axis=(1, 2))
+    axes[2, 0].bar(range(len(outlier_counts_x)), outlier_counts_x, color='red', alpha=0.7)
+    axes[2, 0].axvspan(center_start, center_end, alpha=0.3, color='cyan', label='Center region')
+    axes[2, 0].set_xlabel('X slice (sagittal)')
+    axes[2, 0].set_ylabel('Outlier count')
+    axes[2, 0].set_title('Outliers per sagittal slice')
+    axes[2, 0].legend()
+    
+    # Y-axis (coronal): count outliers in each y-slice
+    outlier_counts_y = np.sum(outlier_mask, axis=(0, 2))
+    axes[2, 1].bar(range(len(outlier_counts_y)), outlier_counts_y, color='red', alpha=0.7)
+    axes[2, 1].set_xlabel('Y slice (coronal)')
+    axes[2, 1].set_ylabel('Outlier count')
+    axes[2, 1].set_title('Outliers per coronal slice')
+    
+    # Z-axis (axial): count outliers in each z-slice
+    outlier_counts_z = np.sum(outlier_mask, axis=(0, 1))
+    axes[2, 2].bar(range(len(outlier_counts_z)), outlier_counts_z, color='red', alpha=0.7)
+    axes[2, 2].set_xlabel('Z slice (axial)')
+    axes[2, 2].set_ylabel('Outlier count')
+    axes[2, 2].set_title('Outliers per axial slice')
+    
+    # Add artifact detection info if provided
+    if artifact_info:
+        info_text = (
+            f"Central Artifact Detection:\n"
+            f"Flag: {artifact_info.get('central_artifact_flag', 'N/A')}\n"
+            f"Concentration: {artifact_info.get('central_concentration', 0):.2%}\n"
+            f"Center outliers: {artifact_info.get('outliers_in_center', 0)}\n"
+            f"Total outliers: {artifact_info.get('outliers_total', 0)}"
+        )
+        fig.text(0.02, 0.98, info_text, transform=fig.transFigure,
+                fontsize=10, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
     
     plt.tight_layout()
     
     if save_path:
         plt.savefig(save_path, dpi=100, bbox_inches='tight')
+        plt.close(fig)
     
     return fig
 
