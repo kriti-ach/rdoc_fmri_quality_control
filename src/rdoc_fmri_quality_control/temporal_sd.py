@@ -110,15 +110,17 @@ def save_sd_nifti(sd_map: np.ndarray, source_nifti_path: str | Path, output_path
     out.header.set_data_shape(sd_map.shape)
     nib.save(out, str(output_path))
 
-def detect_central_line_artifact(
+def detect_horizontal_line_artifact(
     sd_map: np.ndarray,
     mask: np.ndarray,
-    z_threshold: float = 8.0,
-    center_width: int = 5,
-) -> dict[str, float | bool]:
+    min_line_width: int = 3,
+    gradient_threshold: float = 2.0,
+) -> dict[str, float | bool | int]:
     """
-    Detect if high-SD outliers form a horizontal line through the brain.
-    Checks if outliers cluster around the middle Z coordinate (inferior-superior).
+    Detect horizontal line artifact by finding sharp SD transition across Z slices.
+    
+    Looks for a Z coordinate where SD values suddenly increase, indicating
+    a horizontal line/band of high variability.
     
     Parameters
     ----------
@@ -126,59 +128,72 @@ def detect_central_line_artifact(
         3D temporal SD map
     mask : np.ndarray
         Brain mask
-    z_threshold : float
-        Z-score threshold for defining outliers
-    center_width : int
-        Number of slices around horizontal center to check (total width)
+    min_line_width : int
+        Minimum width in voxels for elevated band
+    gradient_threshold : float
+        Minimum SD jump ratio to flag as artifact
         
     Returns
     -------
-    dict with central artifact metrics
+    dict with line artifact detection results
     """
-    vals = sd_map[mask]
-    median_sd = np.median(vals)
-    mad = np.median(np.abs(vals - median_sd))
-    robust_std = 1.4826 * mad
+    nz = sd_map.shape[2]
     
-    # Compute z-scores
-    z_map = (sd_map - median_sd) / (robust_std + 1e-10)
+    # Compute mean SD per Z slice (only in masked brain regions)
+    mean_sd_per_z = np.zeros(nz)
+    median_sd_per_z = np.zeros(nz)
+    p95_sd_per_z = np.zeros(nz)
     
-    # Outlier mask
-    outlier_mask = (z_map >= z_threshold) & mask
-    total_outliers = int(np.sum(outlier_mask))
+    for z in range(nz):
+        slice_mask = mask[:, :, z]
+        if np.sum(slice_mask) > 0:
+            slice_vals = sd_map[:, :, z][slice_mask]
+            mean_sd_per_z[z] = np.mean(slice_vals)
+            median_sd_per_z[z] = np.median(slice_vals)
+            p95_sd_per_z[z] = np.percentile(slice_vals, 95)
     
-    if total_outliers == 0:
+    # Find the largest positive gradient (SD jump) in the p95 values
+    # Use p95 instead of mean to be more sensitive to extreme values
+    gradients = np.diff(p95_sd_per_z)
+    
+    # Find peaks in gradient (where SD suddenly increases)
+    if len(gradients) == 0:
         return {
-            "central_artifact_flag": False,
-            "central_concentration": 0.0,
-            "outliers_in_center": 0,
-            "outliers_total": 0,
+            "line_artifact_detected": False,
+            "line_z_coordinate": -1,
+            "line_sd_ratio": 0.0,
+            "baseline_sd": 0.0,
+            "line_sd": 0.0,
         }
     
-    # Check horizontal band in Z dimension (inferior-superior)
-    # This corresponds to a horizontal line visible in sagittal/coronal views
-    nz = sd_map.shape[2]
-    center_z = nz // 2
-    half_width = center_width // 2
+    max_grad_idx = int(np.argmax(gradients))
+    max_gradient = float(gradients[max_grad_idx])
     
-    z_slice = slice(
-        max(0, center_z - half_width),
-        min(nz, center_z + half_width + 1)
-    )
+    # Check if there's a sustained elevated region after the jump
+    z_line = max_grad_idx  # This is where the jump happens
     
-    outliers_in_center = int(np.sum(outlier_mask[:, :, z_slice]))
-    concentration = outliers_in_center / total_outliers
+    # Compute baseline (mean of slices well below the line)
+    baseline_range = slice(max(0, z_line - 10), max(1, z_line - 2))
+    baseline_sd = float(np.mean(p95_sd_per_z[baseline_range])) if z_line > 2 else float(p95_sd_per_z[0])
     
-    # Flag if >50% of outliers are in center horizontal band
-    has_artifact = concentration > 0.5
+    # Compute line region SD (slices at and just above the line)
+    line_range = slice(z_line, min(nz, z_line + min_line_width + 2))
+    line_sd = float(np.mean(p95_sd_per_z[line_range]))
+    
+    # Ratio: how much higher is the line region vs baseline
+    sd_ratio = line_sd / baseline_sd if baseline_sd > 0 else 0.0
+    
+    # Flag as artifact if the ratio exceeds threshold
+    has_artifact = sd_ratio >= gradient_threshold and baseline_sd > 0
     
     return {
-        "central_artifact_flag": bool(has_artifact),
-        "central_concentration": float(concentration),
-        "outliers_in_center": outliers_in_center,
-        "outliers_total": total_outliers,
-        "center_z_start": max(0, center_z - half_width),
-        "center_z_end": min(nz, center_z + half_width + 1),
+        "line_artifact_detected": bool(has_artifact),
+        "line_z_coordinate": int(z_line),
+        "line_sd_ratio": float(sd_ratio),
+        "baseline_sd": float(baseline_sd),
+        "line_sd": float(line_sd),
+        "mean_sd_per_z": mean_sd_per_z.tolist(),
+        "p95_sd_per_z": p95_sd_per_z.tolist(),
     }
 
 import matplotlib
@@ -188,12 +203,12 @@ import matplotlib.patches as mpatches
 
 def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_width=5, artifact_info=None):
     """
-    Create visualization showing outliers and horizontal line detection region.
+    Create visualization showing SD map and detected horizontal line artifact.
     
     Parameters
     ----------
     artifact_info : dict, optional
-        Output from detect_central_line_artifact() to display on plot
+        Output from detect_horizontal_line_artifact() to display on plot
     """
     median_tsd = np.median(tsd_map[mask])
     mad = np.median(np.abs(tsd_map[mask] - median_tsd))
@@ -202,134 +217,106 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
     
     outlier_mask = (z_scores > z_threshold) & mask
     
-    # Horizontal band in Z dimension (inferior-superior)
-    # This is what shows up as a horizontal line in sagittal/coronal views
-    nz = tsd_map.shape[2]
-    center_z = nz // 2
-    half_width = center_width // 2
-    z_start = max(0, center_z - half_width)
-    z_end = min(nz, center_z + half_width + 1)
-    
-    # Get from artifact_info if available
+    # Get detected line location from artifact_info
+    line_z = None
+    has_line = False
     if artifact_info:
-        z_start = artifact_info.get('center_z_start', z_start)
-        z_end = artifact_info.get('center_z_end', z_end)
+        has_line = artifact_info.get('line_artifact_detected', False)
+        line_z = artifact_info.get('line_z_coordinate', None)
+        if line_z is not None and line_z < 0:
+            line_z = None
     
-    fig, axes = plt.subplots(3, 3, figsize=(18, 15))
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
     
-    # Row 1: TSD maps with horizontal center band marked
-    # Sagittal - mark horizontal band
+    # Row 1: TSD maps with DETECTED LINE marked
+    # Sagittal - mark the detected horizontal line
     slice_idx = tsd_map.shape[0] // 2
     im0 = axes[0, 0].imshow(tsd_map[slice_idx, :, :].T, cmap='viridis', origin='lower', vmin=0, vmax=np.percentile(tsd_map[mask], 99))
-    axes[0, 0].axhspan(z_start, z_end, alpha=0.25, color='red', label=f'Horizontal band\n(Z slices {z_start}-{z_end})')
-    axes[0, 0].set_title(f'TSD - Sagittal (slice {slice_idx})\nRed band = horizontal line region')
+    if line_z is not None:
+        axes[0, 0].axhline(line_z, color='red', linewidth=3, label=f'Detected line at Z={line_z}')
+        axes[0, 0].legend(loc='upper right', fontsize=10)
+    axes[0, 0].set_title(f'TSD - Sagittal (X slice {slice_idx})\n{"RED LINE = DETECTED ARTIFACT" if has_line else "No line detected"}', 
+                        fontweight='bold' if has_line else 'normal')
     axes[0, 0].set_xlabel('Y (posterior ← → anterior)')
     axes[0, 0].set_ylabel('Z (inferior ← → superior)')
-    axes[0, 0].legend(loc='upper right', fontsize=8)
     plt.colorbar(im0, ax=axes[0, 0], fraction=0.046, label='TSD')
     
-    # Coronal - mark horizontal band
+    # Coronal - mark the detected horizontal line
     slice_idx = tsd_map.shape[1] // 2
     im1 = axes[0, 1].imshow(tsd_map[:, slice_idx, :].T, cmap='viridis', origin='lower', vmin=0, vmax=np.percentile(tsd_map[mask], 99))
-    axes[0, 1].axhspan(z_start, z_end, alpha=0.25, color='red', label=f'Horizontal band\n(Z slices {z_start}-{z_end})')
-    axes[0, 1].set_title(f'TSD - Coronal (slice {slice_idx})\nRed band = horizontal line region')
+    if line_z is not None:
+        axes[0, 1].axhline(line_z, color='red', linewidth=3, label=f'Detected line at Z={line_z}')
+        axes[0, 1].legend(loc='upper right', fontsize=10)
+    axes[0, 1].set_title(f'TSD - Coronal (Y slice {slice_idx})\n{"RED LINE = DETECTED ARTIFACT" if has_line else "No line detected"}',
+                        fontweight='bold' if has_line else 'normal')
     axes[0, 1].set_xlabel('X (left ← → right)')
     axes[0, 1].set_ylabel('Z (inferior ← → superior)')
-    axes[0, 1].legend(loc='upper right', fontsize=8)
     plt.colorbar(im1, ax=axes[0, 1], fraction=0.046, label='TSD')
     
-    # Axial - this slice might be IN the horizontal band
-    slice_idx = center_z
+    # Axial - show the slice at the detected line
+    if line_z is not None and 0 <= line_z < tsd_map.shape[2]:
+        slice_idx = line_z
+    else:
+        slice_idx = tsd_map.shape[2] // 2
     im2 = axes[0, 2].imshow(tsd_map[:, :, slice_idx].T, cmap='viridis', origin='lower', vmin=0, vmax=np.percentile(tsd_map[mask], 99))
-    in_band = "YES - IN BAND" if z_start <= slice_idx <= z_end else "NO"
-    axes[0, 2].set_title(f'TSD - Axial (Z slice {slice_idx})\nThis slice in horizontal band? {in_band}')
+    axes[0, 2].set_title(f'TSD - Axial (Z slice {slice_idx})\n{"THIS IS THE LINE SLICE" if line_z == slice_idx else ""}',
+                        fontweight='bold' if line_z == slice_idx else 'normal')
     axes[0, 2].set_xlabel('X (left ← → right)')
     axes[0, 2].set_ylabel('Y (posterior ← → anterior)')
     plt.colorbar(im2, ax=axes[0, 2], fraction=0.046, label='TSD')
     
-    # Row 2: Outlier locations as scatter plot (dots)
-    # Sagittal - show outliers as red dots
-    slice_idx = tsd_map.shape[0] // 2
-    outlier_slice = outlier_mask[slice_idx, :, :]
-    y_coords, z_coords = np.where(outlier_slice)
-    axes[1, 0].imshow(tsd_map[slice_idx, :, :].T, cmap='gray', origin='lower', alpha=0.7)
-    axes[1, 0].scatter(y_coords, z_coords, c='red', s=2, alpha=0.8)
-    axes[1, 0].axhspan(z_start, z_end, alpha=0.2, color='cyan', label='Horizontal band')
-    axes[1, 0].set_title(f'Outliers (z>{z_threshold}) - Sagittal\nRed dots in cyan band count as "in center"')
-    axes[1, 0].set_xlabel('Y (posterior ← → anterior)')
-    axes[1, 0].set_ylabel('Z (inferior ← → superior)')
-    axes[1, 0].legend(fontsize=8)
+    # Row 2: SD profiles showing line detection
+    # Plot mean and p95 SD per Z slice
+    if artifact_info and 'mean_sd_per_z' in artifact_info:
+        mean_sd_per_z = np.array(artifact_info['mean_sd_per_z'])
+        p95_sd_per_z = np.array(artifact_info['p95_sd_per_z'])
+        z_indices = np.arange(len(mean_sd_per_z))
+        
+        axes[1, 0].plot(z_indices, mean_sd_per_z, 'b-', label='Mean SD', linewidth=2)
+        axes[1, 0].plot(z_indices, p95_sd_per_z, 'g-', label='95th percentile SD', linewidth=2)
+        if line_z is not None:
+            axes[1, 0].axvline(line_z, color='red', linewidth=3, linestyle='--', label=f'Detected line (Z={line_z})')
+        axes[1, 0].set_xlabel('Z slice (inferior → superior)')
+        axes[1, 0].set_ylabel('SD value')
+        axes[1, 0].set_title('SD Profile Across Z Slices\n**Sharp jump = horizontal line artifact**')
+        axes[1, 0].legend()
+        axes[1, 0].grid(True, alpha=0.3)
+        
+        # Show gradient (rate of change)
+        gradients = np.diff(p95_sd_per_z)
+        axes[1, 1].bar(z_indices[:-1], gradients, color='steelblue', alpha=0.7, width=1.0)
+        if line_z is not None:
+            axes[1, 1].axvline(line_z, color='red', linewidth=3, linestyle='--', label=f'Detected line')
+        axes[1, 1].set_xlabel('Z slice (inferior → superior)')
+        axes[1, 1].set_ylabel('SD gradient (change between slices)')
+        axes[1, 1].set_title('SD Gradient\n**Peak at detected line shows sharp transition**')
+        axes[1, 1].legend()
+        axes[1, 1].grid(True, alpha=0.3)
+    else:
+        axes[1, 0].text(0.5, 0.5, 'No artifact info available', ha='center', va='center')
+        axes[1, 1].text(0.5, 0.5, 'No artifact info available', ha='center', va='center')
     
-    # Coronal - show outliers as red dots
-    slice_idx = tsd_map.shape[1] // 2
-    outlier_slice = outlier_mask[:, slice_idx, :]
-    x_coords, z_coords = np.where(outlier_slice)
-    axes[1, 1].imshow(tsd_map[:, slice_idx, :].T, cmap='gray', origin='lower', alpha=0.7)
-    axes[1, 1].scatter(x_coords, z_coords, c='red', s=2, alpha=0.8)
-    axes[1, 1].axhspan(z_start, z_end, alpha=0.2, color='cyan', label='Horizontal band')
-    axes[1, 1].set_title(f'Outliers - Coronal\nRed dots in cyan band count as "in center"')
-    axes[1, 1].set_xlabel('X (left ← → right)')
-    axes[1, 1].set_ylabel('Z (inferior ← → superior)')
-    axes[1, 1].legend(fontsize=8)
-    
-    # Axial - show outliers as red dots
-    slice_idx = center_z
-    outlier_slice = outlier_mask[:, :, slice_idx]
-    x_coords, y_coords = np.where(outlier_slice)
-    axes[1, 2].imshow(tsd_map[:, :, slice_idx].T, cmap='gray', origin='lower', alpha=0.7)
-    axes[1, 2].scatter(x_coords, y_coords, c='red', s=2, alpha=0.8)
-    in_band = "YES" if z_start <= slice_idx <= z_end else "NO"
-    axes[1, 2].set_title(f'Outliers - Axial (Z={slice_idx})\nThis slice in horizontal band? {in_band}')
-    axes[1, 2].set_xlabel('X (left ← → right)')
-    axes[1, 2].set_ylabel('Y (posterior ← → anterior)')
-    
-    # Row 3: Outlier counts per slice across each axis
-    # X-axis (sagittal): count outliers in each x-slice
-    outlier_counts_x = np.sum(outlier_mask, axis=(1, 2))
-    axes[2, 0].bar(range(len(outlier_counts_x)), outlier_counts_x, color='steelblue', alpha=0.7)
-    axes[2, 0].set_xlabel('X slice index (left ← → right)')
-    axes[2, 0].set_ylabel('Outlier count')
-    axes[2, 0].set_title('Outliers per sagittal slice\n(left-right distribution)')
-    
-    # Y-axis (coronal): count outliers in each y-slice
-    outlier_counts_y = np.sum(outlier_mask, axis=(0, 2))
-    axes[2, 1].bar(range(len(outlier_counts_y)), outlier_counts_y, color='steelblue', alpha=0.7)
-    axes[2, 1].set_xlabel('Y slice index (posterior ← → anterior)')
-    axes[2, 1].set_ylabel('Outlier count')
-    axes[2, 1].set_title('Outliers per coronal slice\n(front-back distribution)')
-    
-    # Z-axis (axial): count outliers in each z-slice - THIS IS KEY FOR HORIZONTAL LINE
-    outlier_counts_z = np.sum(outlier_mask, axis=(0, 1))
-    axes[2, 2].bar(range(len(outlier_counts_z)), outlier_counts_z, color='steelblue', alpha=0.7)
-    axes[2, 2].axvspan(z_start, z_end, alpha=0.3, color='red', 
-                       label=f'Horizontal band\n(Z slices {z_start}-{z_end})')
-    axes[2, 2].axvline(center_z, color='red', linestyle='--', linewidth=2, label=f'Center Z ({center_z})')
-    axes[2, 2].set_xlabel('Z slice index (inferior ← → superior)')
-    axes[2, 2].set_ylabel('Outlier count')
-    axes[2, 2].set_title('**KEY: Outliers per Z slice**\nPeak in red band = horizontal line artifact')
-    axes[2, 2].legend(fontsize=8)
-    
-    # Add artifact detection info if provided
+    # Show detection metrics
     if artifact_info:
-        flag = artifact_info.get('central_artifact_flag', False)
-        conc = artifact_info.get('central_concentration', 0)
-        info_text = (
-            f"Horizontal Line Artifact Detection:\n"
-            f"Checking Z slices {z_start}-{z_end}\n"
-            f"(red/cyan bands in sagittal/coronal views)\n"
-            f"FLAG: {'YES - ARTIFACT DETECTED' if flag else 'NO'}\n"
-            f"Concentration in band: {conc:.1%}\n"
-            f"Band outliers: {artifact_info.get('outliers_in_center', 0)}\n"
-            f"Total outliers: {artifact_info.get('outliers_total', 0)}\n\n"
-            f"Interpretation: {conc:.0%} of extreme outliers\n"
-            f"are in the horizontal Z band\n"
-            f"(the horizontal line through the brain)"
+        metrics_text = (
+            f"Line Detection Results:\n\n"
+            f"Artifact detected: {'YES' if has_line else 'NO'}\n"
+            f"Line Z coordinate: {line_z if line_z is not None else 'N/A'}\n"
+            f"SD ratio (line/baseline): {artifact_info.get('line_sd_ratio', 0):.2f}\n"
+            f"Baseline SD (below line): {artifact_info.get('baseline_sd', 0):.1f}\n"
+            f"Line SD (at/above line): {artifact_info.get('line_sd', 0):.1f}\n\n"
+            f"Interpretation:\n"
+            f"The line is at Z={line_z if line_z is not None else 'N/A'}\n"
+            f"SD is {artifact_info.get('line_sd_ratio', 0):.1f}x higher at the line"
         )
-        fig.text(0.02, 0.98, info_text, transform=fig.transFigure,
-                fontsize=11, verticalalignment='top', family='monospace',
-                bbox=dict(boxstyle='round', 
-                         facecolor='yellow' if flag else 'lightgreen', 
-                         alpha=0.9, edgecolor='black', linewidth=2))
+        axes[1, 2].text(0.05, 0.95, metrics_text, transform=axes[1, 2].transAxes,
+                       verticalalignment='top', fontsize=10, family='monospace',
+                       bbox=dict(boxstyle='round', facecolor='yellow' if has_line else 'lightgreen', 
+                                alpha=0.9, edgecolor='black', linewidth=2))
+        axes[1, 2].axis('off')
+    else:
+        axes[1, 2].text(0.5, 0.5, 'No artifact info available', ha='center', va='center')
+        axes[1, 2].axis('off')
     
     plt.tight_layout()
     

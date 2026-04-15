@@ -13,7 +13,7 @@ import yaml
 
 from rdoc_fmri_quality_control.temporal_sd import (
     compute_sd_metrics,
-    detect_central_line_artifact,
+    detect_horizontal_line_artifact,
     visualize_outliers,
 )
 
@@ -194,11 +194,11 @@ def main() -> None:
                             local_path,
                             min_mean=float(qc.get("mask_min_mean", 1e-6)),
                         )
-                        artifact_metrics = detect_central_line_artifact(
+                        artifact_metrics = detect_horizontal_line_artifact(
                             sd_map=sd_map,
                             mask=brain_mask,
-                            z_threshold=8.0,
-                            center_width=5,
+                            min_line_width=3,
+                            gradient_threshold=2.0,
                         )
                         
                         if viz_dir is not None:
@@ -269,12 +269,11 @@ def main() -> None:
         "frac_z_ge_5",
         "frac_z_ge_8",
         "frac_z_ge_10",
-        "central_artifact_flag",
-        "central_concentration",
-        "outliers_in_center",
-        "outliers_total",
-        "center_z_start",
-        "center_z_end",
+        "line_artifact_detected",
+        "line_z_coordinate",
+        "line_sd_ratio",
+        "baseline_sd",
+        "line_sd",
     ]
 
     with out_csv.open("w", newline="", encoding="utf-8") as f:
