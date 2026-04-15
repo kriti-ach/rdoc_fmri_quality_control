@@ -11,7 +11,7 @@ from typing import Iterable
 import flywheel
 import yaml
 
-from rdoc_fmri_quality_control.temporal_sd import compute_sd_metrics
+from rdoc_fmri_quality_control.temporal_sd import compute_sd_metrics, detect_central_line_artifact
 
 
 def resolve_config_path(config_arg: str | None) -> Path:
@@ -176,9 +176,15 @@ def main() -> None:
                     local_path = Path(tmpd) / Path(fname).name
                     try:
                         download_acquisition_file(fw, acq.id, fname, local_path)
-                        metrics, _, _ = compute_sd_metrics(
+                        metrics, sd_map, brain_mask = compute_sd_metrics(
                             local_path,
                             min_mean=float(qc.get("mask_min_mean", 1e-6)),
+                        )
+                        artifact_metrics = detect_central_line_artifact(
+                            sd_map=sd_map,
+                            mask=brain_mask,
+                            z_threshold=8.0,
+                            center_width=5,
                         )
                     except Exception as e:  # noqa: BLE001
                         rows.append(
@@ -206,6 +212,7 @@ def main() -> None:
                         "error": "",
                     }
                 )
+                row.update(artifact_metrics)
                 rows.append(row)
                 n_processed += 1
                 print(f"processed {n_processed}: {ses.label} | {acq.label} | {fname}")
@@ -217,7 +224,7 @@ def main() -> None:
         if args.limit and n_processed >= args.limit:
             break
 
-    # Simple header with only essential extent and prevalence metrics.
+    # Essential extent, prevalence, and central artifact detection metrics.
     fieldnames = [
         "project",
         "subject_label",
@@ -229,10 +236,16 @@ def main() -> None:
         "n_timepoints",
         "n_brain_voxels",
         "sd_p99",
+        "sd_p999",
         "sd_max",
         "robust_zmax",
-        "n_z_ge_8",
+        "frac_z_ge_5",
         "frac_z_ge_8",
+        "frac_z_ge_10",
+        "central_artifact_flag",
+        "central_concentration",
+        "outliers_in_center",
+        "outliers_total",
     ]
 
     with out_csv.open("w", newline="", encoding="utf-8") as f:
