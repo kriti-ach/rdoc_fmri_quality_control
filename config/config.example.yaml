@@ -1,9 +1,7 @@
 flywheel:
-  # Recommended: export as environment variable and reference with your launcher wrapper.
-  api_key: "REPLACE_WITH_FLYWHEEL_API_KEY"
+  # Authentication is read from the runtime environment (same pattern as network-rest-pipeline).
   group_id: "russpold"
   project_label: "rdoc_fmri"
-  task_name_contains: ""
 
 qc:
   mask_min_mean: 1.0e-6

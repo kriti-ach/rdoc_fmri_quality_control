@@ -225,7 +225,8 @@ def main() -> None:
     fw_cfg = cfg["flywheel"]
     qc = cfg["qc"]
 
-    fw = flywheel.Client(fw_cfg["api_key"])
+    # Match other pipelines: rely on Flywheel auth already present in environment/session.
+    fw = flywheel.Client()
     group_id = fw_cfg["group_id"]
     project_label = fw_cfg["project_label"]
     task_filter = args.task_name_contains.strip()
