@@ -9,11 +9,9 @@ from pathlib import Path
 from typing import Iterable
 
 import flywheel
-import nibabel as nib
-import numpy as np
 import yaml
 
-from rdoc_fmri_quality_control.temporal_sd import compute_sd_metrics, robust_z
+from rdoc_fmri_quality_control.temporal_sd import compute_sd_metrics
 
 
 def resolve_config_path(config_arg: str | None) -> Path:
@@ -97,93 +95,6 @@ def infer_task_label(file_name: str, acq_label: str, session_label: str) -> str:
     return ""
 
 
-def compute_roi_sd_metrics(sd_map: np.ndarray, brain_mask: np.ndarray, roi_mask: np.ndarray) -> dict[str, float | int]:
-    roi = np.logical_and(brain_mask, roi_mask > 0)
-    vals = sd_map[roi]
-    if vals.size == 0:
-        raise ValueError("ROI mask has no overlap with brain mask.")
-
-    z, _, _ = robust_z(vals)
-    n6 = int(np.sum(z >= 6.0))
-    n8 = int(np.sum(z >= 8.0))
-    return {
-        "roi_n_voxels": int(vals.size),
-        "roi_sd_mean": float(np.mean(vals)),
-        "roi_sd_p95": float(np.percentile(vals, 95)),
-        "roi_sd_p99": float(np.percentile(vals, 99)),
-        "roi_sd_max": float(np.max(vals)),
-        "roi_robust_zmax": float(np.max(z)),
-        "roi_frac_z_ge_6": float(n6 / vals.size),
-        "roi_frac_z_ge_8": float(n8 / vals.size),
-    }
-
-
-def compute_outlier_location_metrics(
-    sd_map: np.ndarray,
-    brain_mask: np.ndarray,
-    z_threshold: float = 8.0,
-    middle_band_axis: str = "z",
-    middle_band_half_width_frac: float = 0.10,
-) -> dict[str, float | int | str]:
-    vals = sd_map[brain_mask]
-    z, _, _ = robust_z(vals)
-
-    brain_flat_idx = np.flatnonzero(brain_mask)
-    outlier_flat_idx = brain_flat_idx[z >= z_threshold]
-    n_outliers = int(outlier_flat_idx.size)
-    axis_to_idx = {"x": 0, "y": 1, "z": 2}
-    axis_idx = axis_to_idx[middle_band_axis]
-    axis_len = sd_map.shape[axis_idx]
-    axis_mid = (axis_len - 1) / 2.0
-    middle_half_width_vox = int(max(1, round(axis_len * middle_band_half_width_frac)))
-
-    if n_outliers == 0:
-        return {
-            "extreme_z_threshold": float(z_threshold),
-            "n_extreme_outlier_voxels": 0,
-            "frac_extreme_outlier_voxels": 0.0,
-            "middle_band_axis": middle_band_axis,
-            "middle_band_half_width_vox": middle_half_width_vox,
-            "n_extreme_middle_band_voxels": 0,
-            "frac_extreme_middle_band": 0.0,
-            "extreme_axis_com": np.nan,
-            "extreme_axis_bias": "none",
-            "extreme_com_x": np.nan,
-            "extreme_com_y": np.nan,
-            "extreme_com_z": np.nan,
-        }
-
-    xyz = np.column_stack(np.unravel_index(outlier_flat_idx, sd_map.shape))
-    axis_vals = xyz[:, axis_idx].astype(np.float64)
-    is_middle = np.abs(axis_vals - axis_mid) <= middle_half_width_vox
-    n_middle = int(np.sum(is_middle))
-
-    com_x = float(np.mean(xyz[:, 0]))
-    com_y = float(np.mean(xyz[:, 1]))
-    com_z = float(np.mean(xyz[:, 2]))
-    axis_com = float(np.mean(axis_vals))
-    if abs(axis_com - axis_mid) <= middle_half_width_vox:
-        axis_bias = "middle"
-    elif axis_com < axis_mid:
-        axis_bias = "low"
-    else:
-        axis_bias = "high"
-
-    return {
-        "extreme_z_threshold": float(z_threshold),
-        "n_extreme_outlier_voxels": n_outliers,
-        "frac_extreme_outlier_voxels": float(n_outliers / np.count_nonzero(brain_mask)),
-        "middle_band_axis": middle_band_axis,
-        "middle_band_half_width_vox": middle_half_width_vox,
-        "n_extreme_middle_band_voxels": n_middle,
-        "frac_extreme_middle_band": float(n_middle / n_outliers),
-        "extreme_axis_com": axis_com,
-        "extreme_axis_bias": axis_bias,
-        "extreme_com_x": com_x,
-        "extreme_com_y": com_y,
-        "extreme_com_z": com_z,
-    }
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run temporal SD QC across Flywheel acquisitions")
@@ -210,29 +121,6 @@ def main() -> None:
         default=None,
         help="Optional regex to filter scan filenames (e.g., '_e2\\.nii(\\.gz)?$')",
     )
-    parser.add_argument(
-        "--line-roi-mask",
-        default=None,
-        help="Optional ROI mask NIfTI for line-artifact area; must match BOLD volume shape.",
-    )
-    parser.add_argument(
-        "--extreme-z-threshold",
-        type=float,
-        default=8.0,
-        help="Robust-z threshold used to define extreme temporal-SD outlier voxels.",
-    )
-    parser.add_argument(
-        "--middle-band-axis",
-        choices=("x", "y", "z"),
-        default="z",
-        help="Axis for middle-band localization of extreme voxels (x, y, or z).",
-    )
-    parser.add_argument(
-        "--middle-band-half-width-frac",
-        type=float,
-        default=0.10,
-        help="Middle-band half-width as fraction of the selected axis length.",
-    )
     args = parser.parse_args()
 
     config_path = resolve_config_path(args.config)
@@ -256,11 +144,6 @@ def main() -> None:
     out_csv = out_dir / "flywheel_temporal_sd_metrics.csv"
 
     file_regex = re.compile(args.file_regex) if args.file_regex else None
-    roi_mask_data = None
-    if args.line_roi_mask:
-        roi_mask_data = np.asanyarray(nib.load(args.line_roi_mask).dataobj)
-        if roi_mask_data.ndim != 3:
-            raise ValueError(f"ROI mask must be 3D; got shape={roi_mask_data.shape}")
 
     rows = []
     n_processed = 0
@@ -293,24 +176,10 @@ def main() -> None:
                     local_path = Path(tmpd) / Path(fname).name
                     try:
                         download_acquisition_file(fw, acq.id, fname, local_path)
-                        metrics, sd_map, brain_mask = compute_sd_metrics(
+                        metrics, _, _ = compute_sd_metrics(
                             local_path,
                             min_mean=float(qc.get("mask_min_mean", 1e-6)),
                         )
-                        loc_metrics = compute_outlier_location_metrics(
-                            sd_map=sd_map,
-                            brain_mask=brain_mask,
-                            z_threshold=float(args.extreme_z_threshold),
-                            middle_band_axis=str(args.middle_band_axis),
-                            middle_band_half_width_frac=float(args.middle_band_half_width_frac),
-                        )
-                        roi_metrics = {}
-                        if roi_mask_data is not None:
-                            if tuple(roi_mask_data.shape) != tuple(sd_map.shape):
-                                raise ValueError(
-                                    f"ROI shape {roi_mask_data.shape} != BOLD shape {sd_map.shape} for {fname}"
-                                )
-                            roi_metrics = compute_roi_sd_metrics(sd_map, brain_mask, roi_mask_data)
                     except Exception as e:  # noqa: BLE001
                         rows.append(
                             {
@@ -337,9 +206,6 @@ def main() -> None:
                         "error": "",
                     }
                 )
-                if roi_mask_data is not None:
-                    row.update(roi_metrics)
-                row.update(loc_metrics)
                 rows.append(row)
                 n_processed += 1
                 print(f"processed {n_processed}: {ses.label} | {acq.label} | {fname}")
@@ -351,64 +217,26 @@ def main() -> None:
         if args.limit and n_processed >= args.limit:
             break
 
-    # Stable header across success/failure rows.
-    base_cols = [
+    # Simple header with only essential extent and prevalence metrics.
+    fieldnames = [
         "project",
         "subject_label",
         "task_label",
         "session_label",
-        "acquisition_label",
         "file_name",
         "status",
         "error",
-    ]
-    metric_cols = [
-        "nifti_path",
         "n_timepoints",
         "n_brain_voxels",
-        "sd_mean",
-        "sd_median",
-        "sd_p95",
         "sd_p99",
         "sd_max",
-        "mad",
-        "robust_z99",
         "robust_zmax",
-        "n_z_ge_6",
         "n_z_ge_8",
-        "frac_z_ge_6",
         "frac_z_ge_8",
-    ]
-    roi_cols = [
-        "roi_n_voxels",
-        "roi_sd_mean",
-        "roi_sd_p95",
-        "roi_sd_p99",
-        "roi_sd_max",
-        "roi_robust_zmax",
-        "roi_frac_z_ge_6",
-        "roi_frac_z_ge_8",
-    ]
-    loc_cols = [
-        "extreme_z_threshold",
-        "n_extreme_outlier_voxels",
-        "frac_extreme_outlier_voxels",
-        "middle_band_axis",
-        "middle_band_half_width_vox",
-        "n_extreme_middle_band_voxels",
-        "frac_extreme_middle_band",
-        "extreme_axis_com",
-        "extreme_axis_bias",
-        "extreme_com_x",
-        "extreme_com_y",
-        "extreme_com_z",
     ]
 
     with out_csv.open("w", newline="", encoding="utf-8") as f:
-        fieldnames = base_cols + metric_cols + loc_cols
-        if roi_mask_data is not None:
-            fieldnames += roi_cols
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
             writer.writerow(row)

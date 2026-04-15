@@ -5,8 +5,6 @@ flywheel:
 
 qc:
   mask_min_mean: 1.0e-6
-  # Optional: 3D mask in BOLD space for line-artifact ROI metrics.
-  line_roi_mask_nifti: ""
 
   # One-scan test
   single_scan_nifti: "/scratch/users/kritiach/rdoc_fmri_quality_control/data/32621_6_1_ses-04_RDoC_fmri_20260202123240_6_e2.nii.gz"
