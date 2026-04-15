@@ -122,7 +122,8 @@ def compute_outlier_location_metrics(
     sd_map: np.ndarray,
     brain_mask: np.ndarray,
     z_threshold: float = 8.0,
-    midline_half_width_frac_x: float = 0.10,
+    middle_band_axis: str = "z",
+    middle_band_half_width_frac: float = 0.10,
 ) -> dict[str, float | int | str]:
     vals = sd_map[brain_mask]
     z, _, _ = robust_z(vals)
@@ -130,49 +131,57 @@ def compute_outlier_location_metrics(
     brain_flat_idx = np.flatnonzero(brain_mask)
     outlier_flat_idx = brain_flat_idx[z >= z_threshold]
     n_outliers = int(outlier_flat_idx.size)
+    axis_to_idx = {"x": 0, "y": 1, "z": 2}
+    axis_idx = axis_to_idx[middle_band_axis]
+    axis_len = sd_map.shape[axis_idx]
+    axis_mid = (axis_len - 1) / 2.0
+    middle_half_width_vox = int(max(1, round(axis_len * middle_band_half_width_frac)))
 
     if n_outliers == 0:
         return {
             "extreme_z_threshold": float(z_threshold),
             "n_extreme_outlier_voxels": 0,
             "frac_extreme_outlier_voxels": 0.0,
-            "midline_half_width_vox_x": int(max(1, round(sd_map.shape[0] * midline_half_width_frac_x))),
-            "n_extreme_midline_voxels": 0,
-            "frac_extreme_midline": 0.0,
+            "middle_band_axis": middle_band_axis,
+            "middle_band_half_width_vox": middle_half_width_vox,
+            "n_extreme_middle_band_voxels": 0,
+            "frac_extreme_middle_band": 0.0,
+            "extreme_axis_com": np.nan,
+            "extreme_axis_bias": "none",
             "extreme_com_x": np.nan,
             "extreme_com_y": np.nan,
             "extreme_com_z": np.nan,
-            "extreme_lr_bias": "none",
         }
 
     xyz = np.column_stack(np.unravel_index(outlier_flat_idx, sd_map.shape))
-    x = xyz[:, 0].astype(np.float64)
-    mid_x = (sd_map.shape[0] - 1) / 2.0
-    midline_half_width_vox = int(max(1, round(sd_map.shape[0] * midline_half_width_frac_x)))
-    is_midline = np.abs(x - mid_x) <= midline_half_width_vox
-    n_midline = int(np.sum(is_midline))
+    axis_vals = xyz[:, axis_idx].astype(np.float64)
+    is_middle = np.abs(axis_vals - axis_mid) <= middle_half_width_vox
+    n_middle = int(np.sum(is_middle))
 
-    com_x = float(np.mean(x))
+    com_x = float(np.mean(xyz[:, 0]))
     com_y = float(np.mean(xyz[:, 1]))
     com_z = float(np.mean(xyz[:, 2]))
-    if abs(com_x - mid_x) <= midline_half_width_vox:
-        lr_bias = "midline"
-    elif com_x < mid_x:
-        lr_bias = "left"
+    axis_com = float(np.mean(axis_vals))
+    if abs(axis_com - axis_mid) <= middle_half_width_vox:
+        axis_bias = "middle"
+    elif axis_com < axis_mid:
+        axis_bias = "low"
     else:
-        lr_bias = "right"
+        axis_bias = "high"
 
     return {
         "extreme_z_threshold": float(z_threshold),
         "n_extreme_outlier_voxels": n_outliers,
         "frac_extreme_outlier_voxels": float(n_outliers / np.count_nonzero(brain_mask)),
-        "midline_half_width_vox_x": midline_half_width_vox,
-        "n_extreme_midline_voxels": n_midline,
-        "frac_extreme_midline": float(n_midline / n_outliers),
+        "middle_band_axis": middle_band_axis,
+        "middle_band_half_width_vox": middle_half_width_vox,
+        "n_extreme_middle_band_voxels": n_middle,
+        "frac_extreme_middle_band": float(n_middle / n_outliers),
+        "extreme_axis_com": axis_com,
+        "extreme_axis_bias": axis_bias,
         "extreme_com_x": com_x,
         "extreme_com_y": com_y,
         "extreme_com_z": com_z,
-        "extreme_lr_bias": lr_bias,
     }
 
 
@@ -213,10 +222,16 @@ def main() -> None:
         help="Robust-z threshold used to define extreme temporal-SD outlier voxels.",
     )
     parser.add_argument(
-        "--midline-half-width-frac-x",
+        "--middle-band-axis",
+        choices=("x", "y", "z"),
+        default="z",
+        help="Axis for middle-band localization of extreme voxels (x, y, or z).",
+    )
+    parser.add_argument(
+        "--middle-band-half-width-frac",
         type=float,
         default=0.10,
-        help="Midline half-width in x dimension as fraction of image width (for outlier localization).",
+        help="Middle-band half-width as fraction of the selected axis length.",
     )
     args = parser.parse_args()
 
@@ -286,7 +301,8 @@ def main() -> None:
                             sd_map=sd_map,
                             brain_mask=brain_mask,
                             z_threshold=float(args.extreme_z_threshold),
-                            midline_half_width_frac_x=float(args.midline_half_width_frac_x),
+                            middle_band_axis=str(args.middle_band_axis),
+                            middle_band_half_width_frac=float(args.middle_band_half_width_frac),
                         )
                         roi_metrics = {}
                         if roi_mask_data is not None:
@@ -377,17 +393,22 @@ def main() -> None:
         "extreme_z_threshold",
         "n_extreme_outlier_voxels",
         "frac_extreme_outlier_voxels",
-        "midline_half_width_vox_x",
-        "n_extreme_midline_voxels",
-        "frac_extreme_midline",
+        "middle_band_axis",
+        "middle_band_half_width_vox",
+        "n_extreme_middle_band_voxels",
+        "frac_extreme_middle_band",
+        "extreme_axis_com",
+        "extreme_axis_bias",
         "extreme_com_x",
         "extreme_com_y",
         "extreme_com_z",
-        "extreme_lr_bias",
     ]
 
     with out_csv.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=base_cols + metric_cols + roi_cols + loc_cols)
+        fieldnames = base_cols + metric_cols + loc_cols
+        if roi_mask_data is not None:
+            fieldnames += roi_cols
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
