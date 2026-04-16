@@ -139,10 +139,11 @@ def detect_horizontal_line_artifact(
     """
     nz = sd_map.shape[2]
     
-    # Compute mean SD per Z slice (only in masked brain regions)
+    # Compute statistics per Z slice (only in masked brain regions)
     mean_sd_per_z = np.zeros(nz)
     median_sd_per_z = np.zeros(nz)
     p95_sd_per_z = np.zeros(nz)
+    sum_sd_per_z = np.zeros(nz)
     
     for z in range(nz):
         slice_mask = mask[:, :, z]
@@ -151,6 +152,7 @@ def detect_horizontal_line_artifact(
             mean_sd_per_z[z] = np.mean(slice_vals)
             median_sd_per_z[z] = np.median(slice_vals)
             p95_sd_per_z[z] = np.percentile(slice_vals, 95)
+            sum_sd_per_z[z] = np.sum(slice_vals)
     
     # Find the largest positive gradient (SD jump) in the p95 values
     # Use p95 instead of mean to be more sensitive to extreme values
@@ -194,6 +196,7 @@ def detect_horizontal_line_artifact(
         "line_sd": float(line_sd),
         "mean_sd_per_z": mean_sd_per_z.tolist(),
         "p95_sd_per_z": p95_sd_per_z.tolist(),
+        "sum_sd_per_z": sum_sd_per_z.tolist(),
     }
 
 import matplotlib
@@ -246,35 +249,31 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
     ax_sag.set_ylabel('Z (inferior ← → superior)', fontsize=11)
     plt.colorbar(im_sag, ax=ax_sag, fraction=0.046, label='Temporal SD')
     
-    # Show SD values at specific Z slices (horizontal strips)
-    ax_strips = fig.add_subplot(gs[2, 0])
-    if line_z is not None and artifact_info and 'p95_sd_per_z' in artifact_info:
-        p95_sd_per_z = np.array(artifact_info['p95_sd_per_z'])
-        # Show a few key Z slices and their SD values
-        key_slices = [
-            max(0, line_z - 10),
-            max(0, line_z - 5),
-            line_z,
-            min(len(p95_sd_per_z) - 1, line_z + 5),
-            min(len(p95_sd_per_z) - 1, line_z + 10),
-        ]
-        slice_labels = [f'Z={z}' for z in key_slices]
-        sd_values = [p95_sd_per_z[z] if 0 <= z < len(p95_sd_per_z) else 0 for z in key_slices]
+    # Show sum of temporal SD per Z slice (bar chart)
+    ax_sum = fig.add_subplot(gs[2, 0])
+    if artifact_info and 'sum_sd_per_z' in artifact_info:
+        sum_sd_per_z = np.array(artifact_info['sum_sd_per_z'])
+        z_indices = np.arange(len(sum_sd_per_z))
         
-        colors = ['blue' if z < line_z else 'red' if z == line_z else 'orange' for z in key_slices]
-        bars = ax_strips.bar(slice_labels, sd_values, color=colors, alpha=0.7)
-        ax_strips.set_ylabel('95th percentile SD', fontsize=11)
-        ax_strips.set_title('SD values at key Z slices\n(blue=below line, red=at line, orange=above)', fontsize=11)
-        ax_strips.tick_params(axis='x', rotation=0)
-        ax_strips.grid(True, alpha=0.3, axis='y')
+        # Color bars based on position relative to detected line
+        if line_z is not None:
+            colors = ['red' if z == line_z else 'orange' if abs(z - line_z) <= 2 else 'steelblue' 
+                     for z in z_indices]
+        else:
+            colors = 'steelblue'
         
-        # Add value labels on bars
-        for bar, val in zip(bars, sd_values):
-            height = bar.get_height()
-            ax_strips.text(bar.get_x() + bar.get_width()/2., height,
-                          f'{val:.1f}', ha='center', va='bottom', fontsize=9)
+        ax_sum.bar(z_indices, sum_sd_per_z, color=colors, alpha=0.7, width=1.0)
+        if line_z is not None:
+            ax_sum.axvline(line_z, color='red', linewidth=3, linestyle='--', label=f'Detected line (Z={line_z})')
+            ax_sum.legend(fontsize=9)
+        
+        ax_sum.set_xlabel('Z slice (inferior → superior)', fontsize=11)
+        ax_sum.set_ylabel('Sum of all voxel temporal SDs', fontsize=11)
+        ax_sum.set_title('**Total SD per Z Slice**\nHigher bars = more temporal variability in that slice', 
+                        fontsize=11, fontweight='bold')
+        ax_sum.grid(True, alpha=0.3, axis='y')
     else:
-        ax_strips.text(0.5, 0.5, 'No detection data', ha='center', va='center', transform=ax_strips.transAxes)
+        ax_sum.text(0.5, 0.5, 'No detection data', ha='center', va='center', transform=ax_sum.transAxes)
     
     # Top right: Full SD profile across all Z slices
     ax_profile = fig.add_subplot(gs[0, 1:])
