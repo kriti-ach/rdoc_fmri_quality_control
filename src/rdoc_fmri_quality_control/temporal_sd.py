@@ -266,7 +266,15 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
         if line_z is not None:
             ax_sum.axvline(line_z, color='red', linewidth=3, linestyle='--', label=f'Detected line (Z={line_z})')
             ax_sum.legend(fontsize=9)
-        
+
+        # Tick mark for every slice (not just matplotlib’s default subsampling)
+        n_z = len(sum_sd_per_z)
+        ax_sum.set_xticks(np.arange(n_z))
+        rot = 90 if n_z > 25 else 0
+        fs = 6 if n_z > 40 else 8
+        ax_sum.set_xticklabels([str(i) for i in range(n_z)], fontsize=fs, rotation=rot)
+        ax_sum.set_xlim(-0.5, n_z - 0.5)
+
         ax_sum.set_xlabel('Z slice (inferior → superior)', fontsize=11)
         ax_sum.set_ylabel('Sum of all voxel temporal SDs', fontsize=11)
         ax_sum.set_title('**Total SD per Z Slice**\nHigher bars = more temporal variability in that slice', 
