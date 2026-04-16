@@ -202,7 +202,6 @@ def detect_horizontal_line_artifact(
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 
 def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_width=5, artifact_info=None):
     """
@@ -213,14 +212,7 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
     artifact_info : dict, optional
         Output from detect_horizontal_line_artifact() to display on plot
     """
-    median_tsd = np.median(tsd_map[mask])
-    mad = np.median(np.abs(tsd_map[mask] - median_tsd))
-    robust_std = 1.4826 * mad
-    z_scores = (tsd_map - median_tsd) / robust_std
-    
-    outlier_mask = (z_scores > z_threshold) & mask
-    
-    # Get detected line location from artifact_info
+    # Get detected line location from artifact_info (for summary text only)
     line_z = None
     has_line = False
     if artifact_info:
@@ -229,107 +221,68 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
         if line_z is not None and line_z < 0:
             line_z = None
     
-    fig = plt.figure(figsize=(20, 12))
-    gs = fig.add_gridspec(3, 3, hspace=0.3, wspace=0.3)
-    
-    # Large sagittal view on left spanning 2 rows
+    fig = plt.figure(figsize=(16, 11))
+    gs = fig.add_gridspec(3, 2, hspace=0.35, wspace=0.35, width_ratios=[2.2, 1.0])
+
+    # Sagittal: plane shape (nz, ny) after transpose of (ny, nz)
     ax_sag = fig.add_subplot(gs[:2, 0])
     slice_idx = tsd_map.shape[0] // 2
-    im_sag = ax_sag.imshow(tsd_map[slice_idx, :, :].T, cmap='viridis', origin='lower', 
-                           vmin=0, vmax=np.percentile(tsd_map[mask], 99))
-    if line_z is not None:
-        ax_sag.axhline(line_z, color='red', linewidth=4, label=f'Detected line at Z={line_z}')
-        # Add a few reference lines above and below
-        ax_sag.axhline(line_z - 5, color='cyan', linewidth=1, linestyle='--', alpha=0.5, label='Z-5')
-        ax_sag.axhline(line_z + 5, color='orange', linewidth=1, linestyle='--', alpha=0.5, label='Z+5')
-        ax_sag.legend(loc='upper right', fontsize=10)
-    ax_sag.set_title(f'Temporal SD - Sagittal (X slice {slice_idx})\n{"RED LINE = DETECTED ARTIFACT" if has_line else "No line detected"}', 
-                    fontweight='bold' if has_line else 'normal', fontsize=14)
-    ax_sag.set_xlabel('Y (posterior ← → anterior)', fontsize=11)
-    ax_sag.set_ylabel('Z (inferior ← → superior)', fontsize=11)
+    plane = tsd_map[slice_idx, :, :].T
+    nz_p, ny_p = plane.shape
+    im_sag = ax_sag.imshow(
+        plane,
+        cmap='viridis',
+        origin='lower',
+        vmin=0,
+        vmax=np.percentile(tsd_map[mask], 99),
+        extent=(0, ny_p - 1, 0, nz_p - 1),
+        aspect='auto',
+    )
+    ax_sag.set_title(f'Temporal SD — Sagittal (X slice {slice_idx})', fontsize=14)
+    ax_sag.set_xlabel('Y index (posterior ← → anterior)', fontsize=11)
+    ax_sag.set_ylabel('Z index (inferior ← → superior)', fontsize=11)
+    # Tick for every column (Y) and every row (Z)
+    ax_sag.set_xticks(np.arange(ny_p))
+    ax_sag.set_xticklabels([str(i) for i in range(ny_p)], fontsize=6, rotation=45, ha='right')
+    ax_sag.set_yticks(np.arange(nz_p))
+    ax_sag.set_yticklabels([str(i) for i in range(nz_p)], fontsize=6)
     plt.colorbar(im_sag, ax=ax_sag, fraction=0.046, label='Temporal SD')
     
-    # Show sum of temporal SD per Z slice (bar chart)
+    # Sum of temporal SD per Z slice (bar chart, no reference lines)
     ax_sum = fig.add_subplot(gs[2, 0])
     if artifact_info and 'sum_sd_per_z' in artifact_info:
         sum_sd_per_z = np.array(artifact_info['sum_sd_per_z'])
         z_indices = np.arange(len(sum_sd_per_z))
-        
-        # Color bars based on position relative to detected line
-        if line_z is not None:
-            colors = ['red' if z == line_z else 'orange' if abs(z - line_z) <= 2 else 'steelblue' 
-                     for z in z_indices]
-        else:
-            colors = 'steelblue'
-        
-        ax_sum.bar(z_indices, sum_sd_per_z, color=colors, alpha=0.7, width=1.0)
-        if line_z is not None:
-            ax_sum.axvline(line_z, color='red', linewidth=3, linestyle='--', label=f'Detected line (Z={line_z})')
-            ax_sum.legend(fontsize=9)
 
-        # Tick mark for every slice (not just matplotlib’s default subsampling)
+        ax_sum.bar(
+            z_indices,
+            sum_sd_per_z,
+            color='steelblue',
+            alpha=0.85,
+            width=1.0,
+            edgecolor='black',
+            linewidth=0.5,
+        )
+
         n_z = len(sum_sd_per_z)
         ax_sum.set_xticks(np.arange(n_z))
-        rot = 90 if n_z > 25 else 0
-        fs = 6 if n_z > 40 else 8
-        ax_sum.set_xticklabels([str(i) for i in range(n_z)], fontsize=fs, rotation=rot)
+        fs = 6 if n_z > 40 else 7
+        ax_sum.set_xticklabels([str(i) for i in range(n_z)], fontsize=fs, rotation=45, ha='right')
         ax_sum.set_xlim(-0.5, n_z - 0.5)
 
         ax_sum.set_xlabel('Z slice (inferior → superior)', fontsize=11)
         ax_sum.set_ylabel('Sum of all voxel temporal SDs', fontsize=11)
-        ax_sum.set_title('**Total SD per Z Slice**\nHigher bars = more temporal variability in that slice', 
-                        fontsize=11, fontweight='bold')
+        ax_sum.set_title(
+            'Total SD per Z slice (sum over voxels)',
+            fontsize=11,
+            fontweight='bold',
+        )
         ax_sum.grid(True, alpha=0.3, axis='y')
     else:
         ax_sum.text(0.5, 0.5, 'No detection data', ha='center', va='center', transform=ax_sum.transAxes)
-    
-    # Top right: Full SD profile across all Z slices
-    ax_profile = fig.add_subplot(gs[0, 1:])
-    if artifact_info and 'mean_sd_per_z' in artifact_info:
-        mean_sd_per_z = np.array(artifact_info['mean_sd_per_z'])
-        p95_sd_per_z = np.array(artifact_info['p95_sd_per_z'])
-        z_indices = np.arange(len(mean_sd_per_z))
-        
-        ax_profile.plot(z_indices, mean_sd_per_z, 'b-', label='Mean SD per slice', linewidth=2, alpha=0.7)
-        ax_profile.plot(z_indices, p95_sd_per_z, 'g-', label='95th %ile SD per slice', linewidth=3)
-        if line_z is not None:
-            ax_profile.axvline(line_z, color='red', linewidth=4, linestyle='--', label=f'DETECTED LINE (Z={line_z})', zorder=10)
-            # Shade baseline region
-            baseline_end = max(0, line_z - 2)
-            ax_profile.axvspan(max(0, line_z - 10), baseline_end, alpha=0.15, color='blue', label='Baseline region')
-            # Shade line region
-            ax_profile.axvspan(line_z, min(len(z_indices), line_z + 5), alpha=0.15, color='red', label='Line region')
-        ax_profile.set_xlabel('Z slice index (inferior → superior)', fontsize=12)
-        ax_profile.set_ylabel('SD value', fontsize=12)
-        ax_profile.set_title('**KEY DIAGNOSTIC: SD Profile Across Z Slices**\nGreen line should jump sharply at red line', 
-                            fontsize=13, fontweight='bold')
-        ax_profile.legend(loc='best', fontsize=10)
-        ax_profile.grid(True, alpha=0.3)
-    else:
-        ax_profile.text(0.5, 0.5, 'No detection data', ha='center', va='center', transform=ax_profile.transAxes)
-    
-    # Middle right: Gradient showing the jump
-    ax_gradient = fig.add_subplot(gs[1, 1:])
-    if artifact_info and 'p95_sd_per_z' in artifact_info:
-        p95_sd_per_z = np.array(artifact_info['p95_sd_per_z'])
-        gradients = np.diff(p95_sd_per_z)
-        z_indices = np.arange(len(gradients))
-        
-        colors = ['red' if i == line_z else 'steelblue' for i in z_indices]
-        ax_gradient.bar(z_indices, gradients, color=colors, alpha=0.7, width=1.0)
-        if line_z is not None:
-            ax_gradient.axvline(line_z, color='red', linewidth=3, linestyle='--', alpha=0.5)
-        ax_gradient.set_xlabel('Z slice index', fontsize=12)
-        ax_gradient.set_ylabel('SD change (slice[i+1] - slice[i])', fontsize=12)
-        ax_gradient.set_title('SD Gradient: Where Does SD Jump?\nRed bar = largest positive jump (the detected line)', 
-                             fontsize=13, fontweight='bold')
-        ax_gradient.grid(True, alpha=0.3, axis='y')
-        ax_gradient.axhline(0, color='black', linewidth=0.5)
-    else:
-        ax_gradient.text(0.5, 0.5, 'No detection data', ha='center', va='center', transform=ax_gradient.transAxes)
-    
-    # Bottom right: Detection summary
-    ax_summary = fig.add_subplot(gs[2, 1:])
+
+    # Right column: detection summary text only
+    ax_summary = fig.add_subplot(gs[:, 1])
     if artifact_info:
         metrics_text = (
             f"═══ HORIZONTAL LINE ARTIFACT DETECTION ═══\n\n"
@@ -340,10 +293,10 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
             f"Ratio (line/baseline): {artifact_info.get('line_sd_ratio', 0):.2f}x\n\n"
             f"═══ INTERPRETATION ═══\n"
             f"The algorithm found the largest SD jump at Z={line_z if line_z is not None else 'N/A'}.\n"
-            f"SD is {artifact_info.get('line_sd_ratio', 0):.1f}x higher at/above the line\n"
-            f"compared to slices well below it.\n\n"
-            f"If the RED LINE on the left image doesn't match\n"
-            f"where YOU see the artifact, the detection needs tuning."
+            f"SD is {artifact_info.get('line_sd_ratio', 0):.1f}x higher at/above that Z\n"
+            f"compared to slices well below.\n\n"
+            f"Compare the sagittal map and bar chart visually;\n"
+            f"if the flagged Z does not match the artifact, tune detection."
         )
         ax_summary.text(0.05, 0.95, metrics_text, transform=ax_summary.transAxes,
                        verticalalignment='top', fontsize=11, family='monospace',
