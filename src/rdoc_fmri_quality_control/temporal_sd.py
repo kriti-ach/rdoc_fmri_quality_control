@@ -221,11 +221,12 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
         if line_z is not None and line_z < 0:
             line_z = None
     
-    fig = plt.figure(figsize=(16, 11))
-    gs = fig.add_gridspec(3, 2, hspace=0.35, wspace=0.35, width_ratios=[2.2, 1.0])
+    threshold = 100.0
+    fig = plt.figure(figsize=(18, 10))
+    gs = fig.add_gridspec(2, 2, hspace=0.35, wspace=0.25, height_ratios=[2.2, 1.0])
 
     # Sagittal: plane shape (nz, ny) after transpose of (ny, nz)
-    ax_sag = fig.add_subplot(gs[:2, 0])
+    ax_sag = fig.add_subplot(gs[0, 0])
     slice_idx = tsd_map.shape[0] // 2
     plane = tsd_map[slice_idx, :, :].T
     nz_p, ny_p = plane.shape
@@ -247,9 +248,30 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
     ax_sag.set_yticks(np.arange(nz_p))
     ax_sag.set_yticklabels([str(i) for i in range(nz_p)], fontsize=6)
     plt.colorbar(im_sag, ax=ax_sag, fraction=0.046, label='Temporal SD')
-    
+
+    # Same sagittal view, but clipped to threshold.
+    ax_sag_clip = fig.add_subplot(gs[0, 1])
+    plane_clip = np.clip(plane, 0.0, threshold)
+    im_sag_clip = ax_sag_clip.imshow(
+        plane_clip,
+        cmap='viridis',
+        origin='lower',
+        vmin=0,
+        vmax=threshold,
+        extent=(0, ny_p - 1, 0, nz_p - 1),
+        aspect='auto',
+    )
+    ax_sag_clip.set_title(f'Temporal SD — Sagittal (X slice {slice_idx}) [clipped <= {int(threshold)}]', fontsize=14)
+    ax_sag_clip.set_xlabel('Y index (posterior ← → anterior)', fontsize=11)
+    ax_sag_clip.set_ylabel('Z index (inferior ← → superior)', fontsize=11)
+    ax_sag_clip.set_xticks(np.arange(ny_p))
+    ax_sag_clip.set_xticklabels([str(i) for i in range(ny_p)], fontsize=6, rotation=45, ha='right')
+    ax_sag_clip.set_yticks(np.arange(nz_p))
+    ax_sag_clip.set_yticklabels([str(i) for i in range(nz_p)], fontsize=6)
+    plt.colorbar(im_sag_clip, ax=ax_sag_clip, fraction=0.046, label='Temporal SD (clipped)')
+
     # Sum of temporal SD per Z slice (bar chart, no reference lines)
-    ax_sum = fig.add_subplot(gs[2, 0])
+    ax_sum = fig.add_subplot(gs[1, 0])
     if artifact_info and 'sum_sd_per_z' in artifact_info:
         sum_sd_per_z = np.array(artifact_info['sum_sd_per_z'])
         z_indices = np.arange(len(sum_sd_per_z))
@@ -281,31 +303,39 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
     else:
         ax_sum.text(0.5, 0.5, 'No detection data', ha='center', va='center', transform=ax_sum.transAxes)
 
-    # Right column: detection summary text only
-    ax_summary = fig.add_subplot(gs[:, 1])
-    if artifact_info:
-        metrics_text = (
-            f"═══ HORIZONTAL LINE ARTIFACT DETECTION ═══\n\n"
-            f"Artifact detected: {'✓ YES' if has_line else '✗ NO'}\n"
-            f"Detected at Z slice: {line_z if line_z is not None else 'N/A'}\n\n"
-            f"SD at baseline (below line): {artifact_info.get('baseline_sd', 0):.2f}\n"
-            f"SD at line (at/above line): {artifact_info.get('line_sd', 0):.2f}\n"
-            f"Ratio (line/baseline): {artifact_info.get('line_sd_ratio', 0):.2f}x\n\n"
-            f"═══ INTERPRETATION ═══\n"
-            f"The algorithm found the largest SD jump at Z={line_z if line_z is not None else 'N/A'}.\n"
-            f"SD is {artifact_info.get('line_sd_ratio', 0):.1f}x higher at/above that Z\n"
-            f"compared to slices well below.\n\n"
-            f"Compare the sagittal map and bar chart visually;\n"
-            f"if the flagged Z does not match the artifact, tune detection."
-        )
-        ax_summary.text(0.05, 0.95, metrics_text, transform=ax_summary.transAxes,
-                       verticalalignment='top', fontsize=11, family='monospace',
-                       bbox=dict(boxstyle='round', facecolor='yellow' if has_line else 'lightgreen', 
-                                alpha=0.95, edgecolor='black', linewidth=3))
-        ax_summary.axis('off')
-    else:
-        ax_summary.text(0.5, 0.5, 'No detection data', ha='center', va='center', transform=ax_summary.transAxes)
-        ax_summary.axis('off')
+    # Matching bar chart for clipped SD values.
+    ax_sum_clip = fig.add_subplot(gs[1, 1])
+    nz = tsd_map.shape[2]
+    sum_sd_clip_per_z = np.zeros(nz, dtype=np.float64)
+    for z in range(nz):
+        slice_mask = mask[:, :, z]
+        if np.any(slice_mask):
+            vals = tsd_map[:, :, z][slice_mask]
+            sum_sd_clip_per_z[z] = np.sum(np.clip(vals, 0.0, threshold))
+
+    z_indices_clip = np.arange(len(sum_sd_clip_per_z))
+    ax_sum_clip.bar(
+        z_indices_clip,
+        sum_sd_clip_per_z,
+        color='steelblue',
+        alpha=0.85,
+        width=1.0,
+        edgecolor='black',
+        linewidth=0.5,
+    )
+    n_z_clip = len(sum_sd_clip_per_z)
+    ax_sum_clip.set_xticks(np.arange(n_z_clip))
+    fs_clip = 6 if n_z_clip > 40 else 7
+    ax_sum_clip.set_xticklabels([str(i) for i in range(n_z_clip)], fontsize=fs_clip, rotation=45, ha='right')
+    ax_sum_clip.set_xlim(-0.5, n_z_clip - 0.5)
+    ax_sum_clip.set_xlabel('Z slice (inferior → superior)', fontsize=11)
+    ax_sum_clip.set_ylabel(f'Sum of voxel temporal SDs (<= {int(threshold)})', fontsize=11)
+    ax_sum_clip.set_title(
+        f'Total SD per Z slice (sum over voxels, clipped <= {int(threshold)})',
+        fontsize=11,
+        fontweight='bold',
+    )
+    ax_sum_clip.grid(True, alpha=0.3, axis='y')
     
     plt.tight_layout()
     
