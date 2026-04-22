@@ -7,7 +7,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 import flywheel
 import yaml
@@ -19,7 +19,7 @@ from rdoc_fmri_quality_control.temporal_sd import (
 )
 
 
-def resolve_config_path(config_arg: str | None) -> Path:
+def resolve_config_path(config_arg: Optional[str]) -> Path:
     if config_arg:
         path = Path(config_arg).expanduser()
         if not path.exists():
@@ -100,7 +100,7 @@ def infer_task_label(file_name: str, acq_label: str, session_label: str) -> str:
     return ""
 
 
-def parse_echo_index(file_name: str) -> int | None:
+def parse_echo_index(file_name: str) -> Optional[int]:
     m = re.search(r"_e(\d+)\.nii(?:\.gz)?$", file_name, flags=re.IGNORECASE)
     if not m:
         return None
@@ -111,7 +111,7 @@ def strip_echo_suffix(file_name: str) -> str:
     return re.sub(r"_e\d+\.nii(?:\.gz)?$", "", file_name, flags=re.IGNORECASE)
 
 
-def parse_tes(raw: str | None) -> list[float]:
+def parse_tes(raw: Optional[str]) -> list[float]:
     if not raw:
         return []
     return [float(x.strip()) for x in raw.split(",") if x.strip()]

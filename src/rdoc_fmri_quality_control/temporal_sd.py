@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Union
 
 import nibabel as nib
 import numpy as np
@@ -54,7 +54,7 @@ def robust_z(values: np.ndarray) -> tuple[np.ndarray, float, float]:
     return (values - med) / scale, med, mad
 
 
-def compute_sd_metrics(nifti_path: str | Path, min_mean: float = 1e-6) -> tuple[SdMetrics, np.ndarray, np.ndarray]:
+def compute_sd_metrics(nifti_path: Union[str, Path], min_mean: float = 1e-6) -> tuple[SdMetrics, np.ndarray, np.ndarray]:
     path = Path(nifti_path)
     img = nib.load(str(path))
     data = np.asanyarray(img.dataobj, dtype=np.float32)
@@ -104,7 +104,7 @@ def compute_sd_metrics(nifti_path: str | Path, min_mean: float = 1e-6) -> tuple[
     return metrics, sd_map, mask
 
 
-def save_sd_nifti(sd_map: np.ndarray, source_nifti_path: str | Path, output_path: str | Path) -> None:
+def save_sd_nifti(sd_map: np.ndarray, source_nifti_path: Union[str, Path], output_path: Union[str, Path]) -> None:
     src = nib.load(str(source_nifti_path))
     out = nib.Nifti1Image(sd_map.astype(np.float32), src.affine, src.header)
     out.header.set_data_shape(sd_map.shape)
@@ -115,7 +115,7 @@ def detect_horizontal_line_artifact(
     mask: np.ndarray,
     min_line_width: int = 3,
     gradient_threshold: float = 2.0,
-) -> dict[str, float | bool | int]:
+) -> Dict[str, Union[float, bool, int]]:
     """
     Detect horizontal line artifact by finding sharp SD transition across Z slices.
     
@@ -315,7 +315,7 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
     
     return fig
 
-def save_mid_sagittal_png(sd_map: np.ndarray, title: str, output_png: str | Path) -> None:
+def save_mid_sagittal_png(sd_map: np.ndarray, title: str, output_png: Union[str, Path]) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
