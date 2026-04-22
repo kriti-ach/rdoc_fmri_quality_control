@@ -5,6 +5,8 @@ flywheel:
 
 qc:
   mask_min_mean: 1.0e-6
+  # TE values (ms) for echo combination mode (--combine-echoes).
+  tedana_tes_ms: [13.4, 13.4, 13.4]
 
   # One-scan test
   single_scan_nifti: "/scratch/users/kritiach/rdoc_fmri_quality_control/data/32621_6_1_ses-04_RDoC_fmri_20260202123240_6_e2.nii.gz"
