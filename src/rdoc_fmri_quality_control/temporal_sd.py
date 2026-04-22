@@ -258,7 +258,7 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
     ax_sag_clip = fig.add_subplot(gs[0, 1])
     plane_masked = np.ma.masked_where(plane > threshold, plane)
     cmap_masked = cm.get_cmap("viridis").copy()
-    cmap_masked.set_bad(color="black")
+    cmap_masked.set_bad(color="gray")
     im_sag_clip = ax_sag_clip.imshow(
         plane_masked,
         cmap=cmap_masked,
@@ -269,7 +269,7 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
         aspect='auto',
     )
     ax_sag_clip.set_title(
-        f'Temporal SD — Sagittal (X slice {slice_idx}) [values > {int(threshold)} blacked out]',
+        f'Temporal SD — Sagittal (X slice {slice_idx}) [values > {int(threshold)} grayed out]',
         fontsize=14,
     )
     ax_sag_clip.set_xlabel('Y index (posterior ← → anterior)', fontsize=11)
@@ -278,7 +278,7 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
     ax_sag_clip.set_xticklabels([str(i) for i in range(ny_p)], fontsize=6, rotation=45, ha='right')
     ax_sag_clip.set_yticks(np.arange(nz_p))
     ax_sag_clip.set_yticklabels([str(i) for i in range(nz_p)], fontsize=6)
-    plt.colorbar(im_sag_clip, ax=ax_sag_clip, fraction=0.046, label='Temporal SD (same scale, blacked > 80)')
+    plt.colorbar(im_sag_clip, ax=ax_sag_clip, fraction=0.046, label='Temporal SD (same scale, grayed > 80)')
 
     # Sum of temporal SD per Z slice (bar chart, no reference lines)
     ax_sum = fig.add_subplot(gs[1, 0])
