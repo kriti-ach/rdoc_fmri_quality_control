@@ -202,6 +202,7 @@ def detect_horizontal_line_artifact(
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from matplotlib import cm
 
 def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_width=5, artifact_info=None):
     """
@@ -230,12 +231,13 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
     slice_idx = tsd_map.shape[0] // 2
     plane = tsd_map[slice_idx, :, :].T
     nz_p, ny_p = plane.shape
+    natural_vmax = float(np.max(tsd_map[mask])) if np.any(mask) else float(np.max(tsd_map))
     im_sag = ax_sag.imshow(
         plane,
         cmap='viridis',
         origin='lower',
         vmin=0,
-        vmax=threshold,
+        vmax=natural_vmax,
         extent=(0, ny_p - 1, 0, nz_p - 1),
         aspect='auto',
     )
@@ -249,26 +251,31 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
     ax_sag.set_yticklabels([str(i) for i in range(nz_p)], fontsize=6)
     plt.colorbar(im_sag, ax=ax_sag, fraction=0.046, label='Temporal SD')
 
-    # Same sagittal view, but clipped to threshold.
+    # Same sagittal view, but black out voxels above threshold.
     ax_sag_clip = fig.add_subplot(gs[0, 1])
-    plane_clip = np.clip(plane, 0.0, threshold)
+    plane_masked = np.ma.masked_where(plane > threshold, plane)
+    cmap_masked = cm.get_cmap("viridis").copy()
+    cmap_masked.set_bad(color="black")
     im_sag_clip = ax_sag_clip.imshow(
-        plane_clip,
-        cmap='viridis',
+        plane_masked,
+        cmap=cmap_masked,
         origin='lower',
         vmin=0,
-        vmax=threshold,
+        vmax=natural_vmax,
         extent=(0, ny_p - 1, 0, nz_p - 1),
         aspect='auto',
     )
-    ax_sag_clip.set_title(f'Temporal SD — Sagittal (X slice {slice_idx}) [clipped <= {int(threshold)}]', fontsize=14)
+    ax_sag_clip.set_title(
+        f'Temporal SD — Sagittal (X slice {slice_idx}) [values > {int(threshold)} blacked out]',
+        fontsize=14,
+    )
     ax_sag_clip.set_xlabel('Y index (posterior ← → anterior)', fontsize=11)
     ax_sag_clip.set_ylabel('Z index (inferior ← → superior)', fontsize=11)
     ax_sag_clip.set_xticks(np.arange(ny_p))
     ax_sag_clip.set_xticklabels([str(i) for i in range(ny_p)], fontsize=6, rotation=45, ha='right')
     ax_sag_clip.set_yticks(np.arange(nz_p))
     ax_sag_clip.set_yticklabels([str(i) for i in range(nz_p)], fontsize=6)
-    plt.colorbar(im_sag_clip, ax=ax_sag_clip, fraction=0.046, label='Temporal SD (clipped)')
+    plt.colorbar(im_sag_clip, ax=ax_sag_clip, fraction=0.046, label='Temporal SD (same scale)')
 
     # Sum of temporal SD per Z slice (bar chart, no reference lines)
     ax_sum = fig.add_subplot(gs[1, 0])
@@ -331,11 +338,13 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
     ax_sum_clip.set_xlabel('Z slice (inferior → superior)', fontsize=11)
     ax_sum_clip.set_ylabel(f'Sum of voxel temporal SDs (<= {int(threshold)})', fontsize=11)
     ax_sum_clip.set_title(
-        f'Total SD per Z slice (sum over voxels, clipped <= {int(threshold)})',
+        f'Total SD per Z slice (sum over voxels, values > {int(threshold)} removed)',
         fontsize=11,
         fontweight='bold',
     )
     ax_sum_clip.grid(True, alpha=0.3, axis='y')
+    # Keep the same y-axis range as the left bar chart for direct comparison.
+    ax_sum_clip.set_ylim(ax_sum.get_ylim())
     
     plt.tight_layout()
     
