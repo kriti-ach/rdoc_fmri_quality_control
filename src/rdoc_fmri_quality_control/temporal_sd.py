@@ -259,16 +259,12 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
     plane_masked = np.ma.masked_where(plane > threshold, plane)
     cmap_masked = cm.get_cmap("viridis").copy()
     cmap_masked.set_bad(color="black")
-    right_vals = plane[(plane <= threshold) & plane_mask]
-    if right_vals.size == 0:
-        right_vals = plane[plane <= threshold]
-    right_vmax = float(np.percentile(right_vals, 99)) if right_vals.size > 0 else threshold
     im_sag_clip = ax_sag_clip.imshow(
         plane_masked,
         cmap=cmap_masked,
         origin='lower',
         vmin=0,
-        vmax=right_vmax,
+        vmax=left_vmax,
         extent=(0, ny_p - 1, 0, nz_p - 1),
         aspect='auto',
     )
@@ -282,7 +278,7 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
     ax_sag_clip.set_xticklabels([str(i) for i in range(ny_p)], fontsize=6, rotation=45, ha='right')
     ax_sag_clip.set_yticks(np.arange(nz_p))
     ax_sag_clip.set_yticklabels([str(i) for i in range(nz_p)], fontsize=6)
-    plt.colorbar(im_sag_clip, ax=ax_sag_clip, fraction=0.046, label='Temporal SD (blacked > 80)')
+    plt.colorbar(im_sag_clip, ax=ax_sag_clip, fraction=0.046, label='Temporal SD (same scale, blacked > 80)')
 
     # Sum of temporal SD per Z slice (bar chart, no reference lines)
     ax_sum = fig.add_subplot(gs[1, 0])
