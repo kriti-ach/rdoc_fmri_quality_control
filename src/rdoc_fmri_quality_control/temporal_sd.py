@@ -221,7 +221,7 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
         if line_z is not None and line_z < 0:
             line_z = None
     
-    threshold = 100.0
+    threshold = 80.0
     fig = plt.figure(figsize=(18, 10))
     gs = fig.add_gridspec(2, 2, hspace=0.35, wspace=0.25, height_ratios=[2.2, 1.0])
 
@@ -235,7 +235,7 @@ def visualize_outliers(tsd_map, mask, z_threshold=5, save_path=None, center_widt
         cmap='viridis',
         origin='lower',
         vmin=0,
-        vmax=np.percentile(tsd_map[mask], 99),
+        vmax=threshold,
         extent=(0, ny_p - 1, 0, nz_p - 1),
         aspect='auto',
     )

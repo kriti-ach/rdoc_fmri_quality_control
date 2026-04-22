@@ -171,7 +171,8 @@ def main() -> None:
     parser.add_argument(
         "--file-regex",
         default=None,
-        help="Optional regex to filter scan filenames (e.g., '_e2\\.nii(\\.gz)?$')",
+        help="Optional regex to filter scan filenames (e.g., '_e2\\.nii(\\.gz)?$'). "
+        "If omitted in single-echo mode, defaults to e2 only.",
     )
     parser.add_argument(
         "--combine-echoes",
@@ -215,8 +216,14 @@ def main() -> None:
         viz_dir = out_dir / "visualizations"
         viz_dir.mkdir(parents=True, exist_ok=True)
 
-    file_regex = re.compile(args.file_regex) if args.file_regex else None
     combine_echoes = bool(args.combine_echoes)
+    if args.file_regex:
+        file_regex = re.compile(args.file_regex)
+    elif not combine_echoes:
+        # Default single-echo behavior: analyze only e2 files.
+        file_regex = re.compile(r"_e2\.nii(?:\.gz)?$", flags=re.IGNORECASE)
+    else:
+        file_regex = None
     requested_echoes = [int(x.strip()) for x in args.echoes.split(",") if x.strip()]
     if combine_echoes and not requested_echoes:
         raise ValueError("--echoes must include at least one echo index")
@@ -252,6 +259,11 @@ def main() -> None:
 
     for ses in sessions:
         for acq in fw.get_session_acquisitions(ses.id):
+            # Restrict to BOLD-style acquisitions to avoid fieldmap/fmap NIfTIs.
+            acq_label = str(_obj_get(acq, "label", "")).lower()
+            if "bold" not in acq_label:
+                continue
+
             acq_files = list(iter_candidate_niftis(acq))
             if combine_echoes:
                 grouped: dict[str, dict[int, str]] = {}
