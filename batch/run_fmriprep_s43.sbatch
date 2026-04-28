@@ -38,7 +38,7 @@ singularity exec --cleanenv \
   "${SIF}" \
   fmriprep "${BIDS_ROOT}" "${DERIV_ROOT}" participant \
     --participant-label s43 \
-    --session-id prelim \
+    --session-label prelim \
     --nthreads "${SLURM_CPUS_PER_TASK:-8}" \
     --omp-nthreads "${SLURM_CPUS_PER_TASK:-8}" \
     --mem-mb 48000 \
