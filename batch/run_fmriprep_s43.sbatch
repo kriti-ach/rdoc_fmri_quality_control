@@ -37,6 +37,7 @@ singularity exec --cleanenv \
   -B "/oak/stanford/groups/russpold:/oak/stanford/groups/russpold" \
   "${SIF}" \
   fmriprep "${BIDS_ROOT}" "${DERIV_ROOT}" participant \
+    --skip-bids-validation \
     --participant-label s43 \
     --session-label prelim \
     --nthreads "${SLURM_CPUS_PER_TASK:-8}" \
@@ -48,3 +49,4 @@ singularity exec --cleanenv \
 
 echo "Done."
 echo "Report: ${DERIV_ROOT}/fmriprep/sub-s43.html"
+ 
